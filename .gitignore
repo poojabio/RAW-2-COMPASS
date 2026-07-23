@@ -1,0 +1,23 @@
+# reference files (large, regenerable)
+kb_work/
+*.idx
+*.fasta
+
+# fastq data
+testfq/
+*.fastq
+*.fastq.gz
+*.fq
+*.fq.gz
+
+# pipeline output
+counts_out/
+*.csv
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# macOS
+.DS_Store
