@@ -14,8 +14,8 @@ def load_kb_counts(counts_dir: Path) -> pd.DataFrame:
     genes = pd.read_csv(genes_path, header=None)[0].tolist()
 
     counts = pd.DataFrame(matrix.T.toarray(), index=genes, columns=barcodes)
-    counts.head(5)
     return counts
+
 
 def filter_low_expression(counts: pd.DataFrame, min_count: int = 10, min_samples: int = 1) -> pd.DataFrame:
     """Keep a gene only if at least `min_samples` columns clear `min_count`."""
@@ -24,7 +24,6 @@ def filter_low_expression(counts: pd.DataFrame, min_count: int = 10, min_samples
           f"(min_count={min_count}, min_samples={min_samples})")
     return counts[mask]
 
-#### Normalizations - first cpm follwoed by log
 
 def normalize_cpm(counts: pd.DataFrame) -> pd.DataFrame:
     """Counts per million, using library size from the raw counts matrix."""
@@ -48,7 +47,7 @@ if __name__ == "__main__":
     print(f"\nTotal counts per sample:\n{counts.sum(axis=0)}")
     print(f"\nGenes with nonzero counts: {(counts.sum(axis=1) > 0).sum()} / {len(counts)}")
 
-    filtered = filter_low_expression(counts)
+    filtered = filter_low_expression(counts, min_count=10, min_samples=1)
     cpm = normalize_cpm(filtered)
     log_cpm = log_transform(cpm)
 

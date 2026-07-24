@@ -2,7 +2,7 @@ import subprocess
 from pathlib import Path
 import time
 import shutil
-#import pandas as pd
+
 
 def find_binary(name):
     path = shutil.which(name)
@@ -13,51 +13,69 @@ def find_binary(name):
         )
     return path
 
+
 KALLISTO = find_binary("kallisto")
 BUSTOOLS = find_binary("bustools")
 
-''' GENERAL IDEA
-1) kb-python for kallisto-based processing 
-2) pandas for normalization 
-3) PyInstaller 
-4) PyFreeze 
-'''
-def ref_builder():
+ALIASES = {
+    "homo_sapiens": "human",
+    "mus_musculus": "mouse",
+    "canis_lupus_familiaris": "dog",
+    "macaca_mulatta": "monkey",
+    "danio_rerio": "zebrafish",
+}
+
+SUPPORTED_SPECIES = {"human", "mouse", "dog", "monkey", "zebrafish"}
+
+
+def get_reference(species: str, work_dir: Path = Path("kb_work")) -> tuple[str, str]:
+    """
+    Checks for a locally cached prebuilt index; downloads via kb-python's
+    -d flag (pachterlab/kallisto-transcriptome-indices) if missing.
+    Fast — no genome build, just a direct download.
+    """
+    species = species.strip().lower()
+    species = ALIASES.get(species, species)  # accepts either style of name
+
+    if species not in SUPPORTED_SPECIES:
+        raise ValueError(
+            f"'{species}' not in prebuilt list: {sorted(SUPPORTED_SPECIES)}. "
+            f"Use ref_builder() to build a custom index instead."
+        )
+
+    work_dir.mkdir(exist_ok=True)
+    index_file = work_dir / f"{species}_index.idx"
+    t2g_file = work_dir / f"{species}_t2g.txt"
+
+    if index_file.exists() and t2g_file.exists():
+        print(f"Using cached prebuilt index for {species}.")
+        return str(index_file), str(t2g_file)
+
+    print(f"Downloading prebuilt index for {species}")
+    subprocess.run([
+        "kb", "ref",
+        "-d", species,
+        "-i", str(index_file),
+        "-g", str(t2g_file),
+        "--kallisto", KALLISTO,
+        "--bustools", BUSTOOLS,
+    ], check=True)
+
+    return str(index_file), str(t2g_file)
+
+
+def ref_builder(species: str) -> tuple[str, str]:
+    """
+    Fallback for species NOT in the prebuilt list — builds from scratch via
+    gget + kb ref. Slow (~20+ min). Only call this if get_reference() raises.
+    """
     print("Hello! Starting Reference Transcript Build")
     start = time.time()
 
-    ### reference 
-    species = input("Species (e.g. homo_sapiens, mouse, dog, monkey, or zebrafish etc. ): ").strip().lower()
-
-    ALIASES = {
-    "human":     "homo_sapiens",
-    "mouse":     "mus_musculus",
-    "dog":       "canis_lupus_familiaris",
-    "monkey":    "macaca_mulatta",
-    "zebrafish": "danio_rerio",}
-
     species = species.strip().lower()
-    species = ALIASES.get(species, species)
-
-
-    ### index (use subprocess to sub out the initial bsh approach) 
-    """
-    Running kb ref --workflow=standard will generate three files:
-    index.idx: Contains the kallisto index used for pseudoalignment and quantification.
-    t2g.txt: A transcript-to-gene mapping file, linking each transcript in the index to its corresponding gene.
-    cdna.fasta: A FASTA file containing the transcript sequences extracted from the input genome FASTA and GTF. This file is not required in downstream steps, but is useful to keep as a reference.
-    """
-
     index_file = f"{species}_index.idx"
     t2g_file = f"{species}_t2g.txt"
     cdna_file = f"{species}_cdna.fasta"
-
-    transcript_gget = subprocess.run(["gget","ref","--ftp","-w","dna,gtf",species], 
-                                     capture_output=True, 
-                                     text=True,
-                                     check=True)
-    
-    gget_out = transcript_gget.stdout.split()
 
     work_dir = Path("kb_work")
     work_dir.mkdir(exist_ok=True)
@@ -66,7 +84,13 @@ def ref_builder():
         print(f"Reference for {species} already built — skipping.")
         return str(work_dir / index_file), str(work_dir / t2g_file)
 
-    shutil.rmtree(work_dir / "tmp", ignore_errors=True) ## clean out anythign else impeding 
+    transcript_gget = subprocess.run(
+        ["gget", "ref", "--ftp", "-w", "dna,gtf", species],
+        capture_output=True, text=True, check=True,
+    )
+    gget_out = transcript_gget.stdout.split()
+
+    shutil.rmtree(work_dir / "tmp", ignore_errors=True)
     subprocess.run([
         "kb", "ref",
         "-i", index_file,
@@ -79,107 +103,125 @@ def ref_builder():
     ], cwd=work_dir, check=True)
 
     elapsed = time.time() - start
-    print( "Done! Reference Transcript Build")
+    print("Done! Reference Transcript Build")
     print(f"Took {elapsed:.1f} seconds")
 
     return str(work_dir / index_file), str(work_dir / t2g_file)
 
-###ref_builder()
 
-#finding pairs of fwd and rev reads
-def find_file_pairs():
+def find_file_pairs(folder: Path) -> tuple[dict, list]:
+    """
+    Scans `folder` for paired fastqs. Returns (paired, unpaired).
+    paired: {sample_id: (fwd_path, rev_path)}
+    """
     print("Parsing through for file pairs")
     start = time.time()
 
+    folder = Path(folder).expanduser()
+    if not folder.is_dir():
+        raise ValueError(f"Not a folder: {folder}")
 
     paired = {}
     unpaired = []
-    folder = Path(input("Path to FASTQ folder: ").strip()).expanduser()
 
-# exit or re-prompt for folder path
-    while True:
-        if  folder.is_dir():
-            break
-        print(f"Not a folder: {folder}")
-        folder = Path(input("Path to FASTQ folder: ").strip()).expanduser()
-
-    PAIR_PATTERNS =[
-    ("_R1", "_R2"),
-    ("read1", "read2"),
-    ("forward", "reverse"),
-    ("_1", "_2")]
+    PAIR_PATTERNS = [
+        ("_R1", "_R2"),
+        ("read1", "read2"),
+        ("forward", "reverse"),
+        ("_1", "_2"),
+    ]
 
     for file in folder.iterdir():
-    #if file.suffix == ".gz":
-        ###sample = file.stem
+        if not file.is_file():
+            continue
+
+        matched = False
         for fwd_token, rev_token in PAIR_PATTERNS:
             if fwd_token in file.name:
-                fwd = file
-                rev_name = file.name.replace(fwd_token, rev_token) ## TEMPORARILY THE FILE LOOKING TO BE FOUND
-                rev = file.parent / rev_name ##reverse file as a whole
-
+                rev_name = file.name.replace(fwd_token, rev_token)
+                rev = file.parent / rev_name
                 if rev.exists():
-                    sample = file.name[:file.name.find(fwd_token)] # this takes the sample name essentially like .stem however considering naming conventions this is more optimal
+                    sample = file.name[:file.name.find(fwd_token)]
                     paired[sample] = (file, rev)
+                    matched = True
+                break  # stop checking other patterns once one token matches
 
-                else:
-                    unpaired.append(file)
-
-                    
-        else:
+        if not matched:
             unpaired.append(file)
-                    ###paired[fwd] = rev
 
     for sample, (fwd, rev) in paired.items():
         print(f"{sample}: {fwd.name} + {rev.name}")
-        #print(f"Oops we had some unpaired {unpaired}")
 
-
-    print( "Done! Pair finding")
-
+    print("Done! Pair finding")
     elapsed = time.time() - start
     print(f"Took {elapsed:.1f} seconds")
     return paired, unpaired
 
-def write_batch_file(paired, out_path: Path) -> Path:
+
+def find_single_files(folder: Path) -> dict:
     """
-    paired: {sample_id: (fwd_path, rev_path)}
-    Writes a tab-separated batch file kb count expects for multi-sample BULK runs:
-        sample_id    fastq_1    fastq_2
+    Single-end mode: every fastq in the folder is its own sample.
+    {sample_id: file_path}
+    """
+    folder = Path(folder).expanduser()
+    if not folder.is_dir():
+        raise ValueError(f"Not a folder: {folder}")
+
+    singles = {}
+    for file in folder.iterdir():
+        if file.is_file() and file.suffix in (".gz", ".fastq", ".fq"):
+            sample = file.stem.replace(".fastq", "").replace(".fq", "")
+            singles[sample] = file
+    return singles
+
+
+def write_batch_file(samples: dict, out_path: Path, parity: str) -> Path:
+    """
+    samples: {sample_id: (fwd, rev)} for paired, or {sample_id: file} for single.
     """
     with open(out_path, "w") as f:
-        for sample_id, (fwd, rev) in paired.items():
-            f.write(f"{sample_id}\t{fwd}\t{rev}\n")
+        if parity == "paired":
+            for sample_id, (fwd, rev) in samples.items():
+                f.write(f"{sample_id}\t{fwd}\t{rev}\n")
+        else:
+            for sample_id, fwd in samples.items():
+                f.write(f"{sample_id}\t{fwd}\n")
     return out_path
 
 
-def run_count(paired, index, t2g,  work_dir=Path(".")):
+def run_count(samples: dict, index: str, t2g: str, parity: str = "paired",
+              work_dir: Path = Path(".")) -> Path:
+    """
+    parity: "paired" or "single" — samples dict shape must match (see write_batch_file).
+    Returns the output directory path.
+    """
     print("Hello! Beginning Run Count function")
     start = time.time()
 
-    batch_file = write_batch_file(paired, work_dir / "batch.txt")
+    batch_file = write_batch_file(samples, work_dir / "batch.txt", parity)
+    out_dir = work_dir / "counts_out"
 
     subprocess.run([
-    "kb", "count",
-    "-i", index,
-    "-g", t2g,
-    "-x", "BULK",
-    "--parity", "paired",
-    "-o", "counts_out",
-    "--kallisto", KALLISTO,
-    "--bustools", BUSTOOLS,
-    "-t", "8",
-    str(batch_file),
-], check=True, cwd=work_dir)
+        "kb", "count",
+        "-i", index,
+        "-g", t2g,
+        "-x", "BULK",
+        "--parity", parity,
+        "-o", str(out_dir),
+        "--kallisto", KALLISTO,
+        "--bustools", BUSTOOLS,
+        "-t", "8",
+        str(batch_file),
+    ], check=True, cwd=work_dir)
 
     print("Done! Run Count function")
     elapsed = time.time() - start
     print(f"Took {elapsed:.1f} seconds")
+    return out_dir
 
 
-            
-index, t2g = ref_builder()
-paired, unpaired = find_file_pairs()
-run_count(paired, index, t2g)
-
-
+if __name__ == "__main__":
+    # CLI test path — mirrors what gui.py will eventually call
+    index, t2g = get_reference("human")
+    paired, unpaired = find_file_pairs(Path("testfq"))
+    run_count(paired, index, t2g, parity="paired")
