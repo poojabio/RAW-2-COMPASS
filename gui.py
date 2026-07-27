@@ -3,114 +3,63 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTabWidget, QLabel, QLineEdit, QPushButton, QComboBox,
-    QFileDialog, QTextEdit
+    QFileDialog, QTextEdit, QListWidget, QListWidgetItem,
+    QTableWidget, QTableWidgetItem, QMessageBox, QCheckBox
 )
 from PySide6.QtCore import QThread, Signal, Qt
 
-from kb_script import get_reference, find_file_pairs, find_single_files, run_count
-from matrix import load_kb_counts, normalize_cpm, log_transform, export_matrix
+from kb_script import get_reference, pair_selected_files, selected_files_as_singles, run_count
+from matrix import load_kb_counts, normalize_cpm, log_transform, batch_correct, export_matrix
 
-
-# Colors pulled from the COMPASS Prep site
 NAVY = "#0F2B46"
 ACCENT_BLUE = "#2E5FA3"
 ACCENT_BLUE_HOVER = "#25507F"
 BODY_GRAY = "#5B6B7B"
-BG = "#F7FAFC"
 BORDER = "#DDE5EC"
 TEAL = "#1F9D82"
 
 STYLESHEET = f"""
-QMainWindow {{
-    background-color: {BG};
-}}
+QMainWindow {{ background-color: white; }}
+QWidget {{ background-color: white; }}
 
-QLabel {{
-    color: {BODY_GRAY};
-    font-size: 13px;
-}}
+QLabel {{ color: {BODY_GRAY}; font-size: 13px; }}
+QLabel#header {{ color: {NAVY}; font-size: 26px; font-weight: 800; }}
+QLabel#eyebrow {{ color: {ACCENT_BLUE}; font-size: 11px; font-weight: 700; letter-spacing: 1px; }}
 
-QLabel#header {{
-    color: {NAVY};
-    font-size: 26px;
-    font-weight: 800;
-}}
-
-QLabel#eyebrow {{
-    color: {ACCENT_BLUE};
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 1px;
-}}
-
-QTabWidget::pane {{
-    border: none;
-    background-color: {BG};
-}}
-
-QTabBar::tab {{
-    background: transparent;
-    color: {BODY_GRAY};
-    padding: 10px 18px;
-    font-weight: 600;
-    font-size: 13px;
-}}
-
-QTabBar::tab:selected {{
-    color: {NAVY};
-    border-bottom: 2px solid {ACCENT_BLUE};
-}}
+QTabWidget::pane {{ border: none; background-color: white; }}
+QTabBar::tab {{ background: transparent; color: {BODY_GRAY}; padding: 10px 18px; font-weight: 600; font-size: 13px; }}
+QTabBar::tab:selected {{ color: {NAVY}; border-bottom: 2px solid {ACCENT_BLUE}; }}
 
 QLineEdit, QComboBox {{
-    background-color: white;
-    border: 1px solid {BORDER};
-    border-radius: 8px;
-    padding: 8px 10px;
-    color: {NAVY};
-    font-size: 13px;
+    background-color: white; border: 1px solid {BORDER}; border-radius: 8px;
+    padding: 8px 10px; color: {NAVY}; font-size: 13px;
 }}
+QLineEdit:focus, QComboBox:focus {{ border: 1px solid {ACCENT_BLUE}; }}
 
-QLineEdit:focus, QComboBox:focus {{
-    border: 1px solid {ACCENT_BLUE};
+QListWidget, QTableWidget {{
+    background-color: white; border: 1px solid {BORDER}; border-radius: 8px;
+    color: {NAVY}; font-size: 13px;
+}}
+QListWidget::item, QTableWidget::item {{ padding: 6px; color: {NAVY}; }}
+QListWidget::item:selected, QTableWidget::item:selected {{ background-color: {ACCENT_BLUE}; color: white; }}
+
+QHeaderView::section {{
+    background-color: white; color: {BODY_GRAY}; border: none;
+    border-bottom: 1px solid {BORDER}; padding: 6px; font-weight: 600;
 }}
 
 QPushButton {{
-    background-color: {ACCENT_BLUE};
-    color: white;
-    border: none;
-    border-radius: 20px;
-    padding: 10px 22px;
-    font-weight: 700;
-    font-size: 13px;
+    background-color: {ACCENT_BLUE}; color: white; border: none; border-radius: 20px;
+    padding: 10px 22px; font-weight: 700; font-size: 13px;
 }}
-
-QPushButton:hover {{
-    background-color: {ACCENT_BLUE_HOVER};
-}}
-
-QPushButton:disabled {{
-    background-color: {BORDER};
-    color: {BODY_GRAY};
-}}
-
-QPushButton#secondary {{
-    background-color: transparent;
-    color: {ACCENT_BLUE};
-    border: 1px solid {ACCENT_BLUE};
-}}
-
-QPushButton#secondary:hover {{
-    background-color: #EAF1F9;
-}}
+QPushButton:hover {{ background-color: {ACCENT_BLUE_HOVER}; }}
+QPushButton:disabled {{ background-color: {BORDER}; color: {BODY_GRAY}; }}
+QPushButton#secondary {{ background-color: white; color: {ACCENT_BLUE}; border: 1px solid {ACCENT_BLUE}; }}
+QPushButton#secondary:hover {{ background-color: #EAF1F9; }}
 
 QTextEdit {{
-    background-color: white;
-    border: 1px solid {BORDER};
-    border-radius: 8px;
-    color: {NAVY};
-    font-family: Menlo, Consolas, monospace;
-    font-size: 12px;
-    padding: 8px;
+    background-color: white; border: 1px solid {BORDER}; border-radius: 8px;
+    color: {NAVY}; font-family: Menlo, Consolas, monospace; font-size: 12px; padding: 8px;
 }}
 """
 
@@ -120,10 +69,10 @@ class PipelineWorker(QThread):
     finished_ok = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, species, fastq_folder, parity):
+    def __init__(self, species, samples, parity):
         super().__init__()
         self.species = species
-        self.fastq_folder = fastq_folder
+        self.samples = samples  # already-selected/paired dict
         self.parity = parity
 
     def run(self):
@@ -131,14 +80,8 @@ class PipelineWorker(QThread):
             self.progress.emit("Fetching reference index...")
             index, t2g = get_reference(self.species)
 
-            self.progress.emit("Finding fastq files...")
-            if self.parity == "paired":
-                samples, unmatched = find_file_pairs(Path(self.fastq_folder))
-            else:
-                samples = find_single_files(Path(self.fastq_folder))
-
             self.progress.emit("Running kb count (this may take a while)...")
-            out_dir = run_count(samples, index, t2g, parity=self.parity)
+            out_dir = run_count(self.samples, index, t2g, parity=self.parity)
 
             self.finished_ok.emit(out_dir)
         except Exception as e:
@@ -149,12 +92,17 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("RAW2Compass")
-        self.resize(920, 620)
+        self.resize(960, 660)
+
+        self.detected_samples = {}
 
         tabs = QTabWidget()
         tabs.addTab(self._build_run_panel(), "Run Pipeline")
+        ##tabs.addTab(self._build_batch_panel(), "Batch Correction")
         tabs.addTab(self._build_results_panel(), "Results")
         self.setCentralWidget(tabs)
+
+    # ---------- Run Pipeline tab ----------
 
     def _build_run_panel(self) -> QWidget:
         panel = QWidget()
@@ -169,7 +117,6 @@ class MainWindow(QMainWindow):
         header = QLabel("RAW2Compass")
         header.setObjectName("header")
         layout.addWidget(header)
-
         layout.addSpacing(10)
 
         layout.addWidget(QLabel("Species"))
@@ -177,23 +124,39 @@ class MainWindow(QMainWindow):
         self.species_dropdown.addItems(["human", "mouse", "dog", "monkey", "zebrafish"])
         layout.addWidget(self.species_dropdown)
 
-        layout.addWidget(QLabel("FASTQ Folder"))
-        folder_row = QHBoxLayout()
+        layout.addWidget(QLabel("FASTQ Files"))
+        file_row = QHBoxLayout()
         self.folder_input = QLineEdit()
-        browse_btn = QPushButton("Browse")
+        self.folder_input.setReadOnly(True)
+        self.folder_input.setPlaceholderText("No files selected yet")
+        browse_btn = QPushButton("Select FASTQ Files")
         browse_btn.setObjectName("secondary")
-        browse_btn.clicked.connect(self._pick_folder)
-        folder_row.addWidget(self.folder_input)
-        folder_row.addWidget(browse_btn)
-        layout.addLayout(folder_row)
+        browse_btn.clicked.connect(self._pick_files)
+        file_row.addWidget(self.folder_input)
+        file_row.addWidget(browse_btn)
+        layout.addLayout(file_row)
 
         layout.addWidget(QLabel("Read Type"))
         self.parity_dropdown = QComboBox()
         self.parity_dropdown.addItems(["paired", "single"])
         layout.addWidget(self.parity_dropdown)
 
-        layout.addSpacing(10)
+        select_row = QHBoxLayout()
+        select_row.addWidget(QLabel("Samples — uncheck any to exclude from this run"))
+        select_all_btn = QPushButton("Select All")
+        select_all_btn.setObjectName("secondary")
+        select_all_btn.clicked.connect(lambda: self._set_all_checked(True))
+        none_btn = QPushButton("None")
+        none_btn.setObjectName("secondary")
+        none_btn.clicked.connect(lambda: self._set_all_checked(False))
+        select_row.addWidget(select_all_btn)
+        select_row.addWidget(none_btn)
+        layout.addLayout(select_row)
 
+        self.sample_list = QListWidget()
+        layout.addWidget(self.sample_list)
+
+        layout.addSpacing(6)
         self.run_btn = QPushButton("Run Pipeline  →")
         self.run_btn.clicked.connect(self._start_pipeline)
         layout.addWidget(self.run_btn, alignment=Qt.AlignLeft)
@@ -207,31 +170,70 @@ class MainWindow(QMainWindow):
         panel.setLayout(layout)
         return panel
 
-    def _build_results_panel(self) -> QWidget:
-        panel = QWidget()
-        layout = QVBoxLayout()
-        layout.setContentsMargins(30, 30, 30, 30)
-        layout.addWidget(QLabel("Normalized matrix preview + export controls go here"))
-        panel.setLayout(layout)
-        return panel
-
-    def _pick_folder(self):
-        folder = QFileDialog.getExistingDirectory(self, "Select FASTQ folder")
-        if folder:
-            self.folder_input.setText(folder)
-
     def _pick_files(self):
-        folder = QFileDialog.getExistingDirectory(self, "Select FASTQ files")
-        if folder:
-            self.folder_input.setText(folder)
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Select FASTQ files", "",
+            "FASTQ files (*.fastq *.fastq.gz *.fq *.fq.gz)"
+        )
+        if not files:
+            return
+
+        file_paths = [Path(f) for f in files]
+        self.folder_input.setText(f"{len(file_paths)} file(s) selected")
+        self._detect_samples_from_files(file_paths)
+
+    def _detect_samples_from_files(self, file_paths: list[Path]):
+        self.status_log.append(f"Processing {len(file_paths)} selected file(s)...")
+        try:
+            parity = self.parity_dropdown.currentText()
+            if parity == "paired":
+                samples, unmatched = pair_selected_files(file_paths)
+                if unmatched:
+                    self.status_log.append(
+                        f"Note: {len(unmatched)} file(s) didn't pair up and are excluded: "
+                        f"{[f.name for f in unmatched]}"
+                    )
+            else:
+                samples = selected_files_as_singles(file_paths)
+
+            self.detected_samples = samples
+            self.sample_list.clear()
+            for sample_id in samples:
+                item = QListWidgetItem(sample_id)
+                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+                item.setCheckState(Qt.Checked)
+                self.sample_list.addItem(item)
+
+            self.status_log.append(f"Found {len(samples)} sample(s).")
+        except Exception as e:
+            self.status_log.append(f"Error processing files: {e}")
+
+    def _set_all_checked(self, checked: bool):
+        state = Qt.Checked if checked else Qt.Unchecked
+        for i in range(self.sample_list.count()):
+            self.sample_list.item(i).setCheckState(state)
+
+    def _get_selected_samples(self) -> dict:
+        selected_ids = set()
+        for i in range(self.sample_list.count()):
+            item = self.sample_list.item(i)
+            if item.checkState() == Qt.Checked:
+                selected_ids.add(item.text())
+        return {sid: path for sid, path in self.detected_samples.items() if sid in selected_ids}
 
     def _start_pipeline(self):
+        selected = self._get_selected_samples()
+        if not selected:
+            QMessageBox.warning(self, "No samples selected",
+                                 "Select at least one sample before running.")
+            return
+
         self.run_btn.setEnabled(False)
-        self.status_log.append("Starting pipeline...")
+        self.status_log.append(f"Starting pipeline on {len(selected)} sample(s)...")
 
         self.worker = PipelineWorker(
             species=self.species_dropdown.currentText(),
-            fastq_folder=self.folder_input.text(),
+            samples=selected,
             parity=self.parity_dropdown.currentText(),
         )
         self.worker.progress.connect(self.status_log.append)
@@ -246,6 +248,96 @@ class MainWindow(QMainWindow):
     def _on_pipeline_error(self, error_msg):
         self.status_log.append(f"Error: {error_msg}")
         self.run_btn.setEnabled(True)
+
+    # ---------- Batch Correction tab (scaffold — not yet functional) ----------
+    def _build_results_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout()
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(14)
+
+        eyebrow = QLabel("NORMALIZATION & EXPORT")
+        eyebrow.setObjectName("eyebrow")
+        layout.addWidget(eyebrow)
+
+        header = QLabel("Results")
+        header.setObjectName("header")
+        layout.addWidget(header)
+
+        self.load_results_btn = QPushButton("Load Counts from Last Run")
+        self.load_results_btn.setObjectName("secondary")
+        self.load_results_btn.clicked.connect(self._load_results)
+        layout.addWidget(self.load_results_btn, alignment=Qt.AlignLeft)
+
+        self.batch_correct_checkbox = QCheckBox("Apply batch correction (ComBat)")
+        self.batch_correct_checkbox.stateChanged.connect(self._toggle_batch_table)
+        layout.addWidget(self.batch_correct_checkbox)
+
+        self.results_batch_table = QTableWidget(0, 2)
+        self.results_batch_table.setHorizontalHeaderLabels(["Sample", "Batch"])
+        self.results_batch_table.setVisible(False)
+        layout.addWidget(self.results_batch_table)
+
+        self.export_btn = QPushButton("Normalize + Export  →")
+        self.export_btn.clicked.connect(self._run_normalization)
+        layout.addWidget(self.export_btn, alignment=Qt.AlignLeft)
+
+        self.results_log = QTextEdit()
+        self.results_log.setReadOnly(True)
+        layout.addWidget(self.results_log)
+
+        panel.setLayout(layout)
+        return panel
+
+    def _toggle_batch_table(self, state):
+        checked = state == Qt.Checked.value
+        self.results_batch_table.setVisible(checked)
+        if checked:
+            self.results_batch_table.setRowCount(0)
+            for sample_id in self.detected_samples:
+                row = self.results_batch_table.rowCount()
+                self.results_batch_table.insertRow(row)
+                self.results_batch_table.setItem(row, 0, QTableWidgetItem(sample_id))
+                self.results_batch_table.setItem(row, 1, QTableWidgetItem(""))
+
+    def _load_results(self):
+        try:
+            counts = load_kb_counts(Path("counts_out/counts_unfiltered"))
+            self._loaded_counts = counts
+            self.results_log.append(f"Loaded {counts.shape[0]} genes x {counts.shape[1]} samples.")
+        except Exception as e:
+            self.results_log.append(f"Error loading counts: {e}")
+
+    def _run_normalization(self):
+        if not hasattr(self, "_loaded_counts"):
+            QMessageBox.warning(self, "No data", "Load counts before normalizing.")
+            return
+
+        try:
+            cpm = normalize_cpm(self._loaded_counts)
+            log_cpm = log_transform(cpm)
+
+            if self.batch_correct_checkbox.isChecked():
+                batch_labels = {}
+                for row in range(self.results_batch_table.rowCount()):
+                    sample_id = self.results_batch_table.item(row, 0).text()
+                    batch_item = self.results_batch_table.item(row, 1)
+                    batch_labels[sample_id] = batch_item.text() if batch_item else ""
+
+                if any(not b for b in batch_labels.values()):
+                    QMessageBox.warning(self, "Missing batch labels",
+                                        "Assign a batch to every sample before correcting.")
+                    return
+
+                self.results_log.append("Applying batch correction...")
+                log_cpm = batch_correct(log_cpm, batch_labels)
+
+            export_matrix(cpm, Path("cpm_matrix.csv"))
+            export_matrix(log_cpm, Path("log_cpm_matrix.csv"))
+            self.results_log.append("Exported cpm_matrix.csv and log_cpm_matrix.csv")
+
+        except Exception as e:
+            self.results_log.append(f"Error: {e}")
 
 
 if __name__ == "__main__":

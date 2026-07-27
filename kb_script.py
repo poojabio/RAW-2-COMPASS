@@ -157,6 +157,55 @@ def find_file_pairs(folder: Path) -> tuple[dict, list]:
     print(f"Took {elapsed:.1f} seconds")
     return paired, unpaired
 
+def pair_selected_files(file_paths: list[Path]) -> tuple[dict, list]:
+    """
+    Same pairing logic as find_file_pairs, but operates on an explicit
+    list of files (e.g. from a multi-select file dialog) instead of
+    scanning an entire folder.
+    """
+    PAIR_PATTERNS = [
+        ("_R1", "_R2"),
+        ("read1", "read2"),
+        ("forward", "reverse"),
+        ("_1", "_2"),
+    ]
+
+    file_set = {Path(f) for f in file_paths}
+    paired = {}
+    unpaired = []
+    claimed = set()
+
+    for file in file_set:
+        if file in claimed:
+            continue
+
+        matched = False
+        for fwd_token, rev_token in PAIR_PATTERNS:
+            if fwd_token in file.name:
+                rev_name = file.name.replace(fwd_token, rev_token)
+                rev = file.parent / rev_name
+                if rev in file_set:
+                    sample = file.name[:file.name.find(fwd_token)]
+                    paired[sample] = (file, rev)
+                    claimed.add(file)
+                    claimed.add(rev)
+                    matched = True
+                break
+
+        if not matched and file not in claimed:
+            unpaired.append(file)
+
+    return paired, unpaired
+
+
+def selected_files_as_singles(file_paths: list[Path]) -> dict:
+    """Single-end mode: each selected file is its own sample."""
+    singles = {}
+    for file in file_paths:
+        file = Path(file)
+        sample = file.stem.replace(".fastq", "").replace(".fq", "")
+        singles[sample] = file
+    return singles
 
 def find_single_files(folder: Path) -> dict:
     """
