@@ -17,14 +17,6 @@ def load_kb_counts(counts_dir: Path) -> pd.DataFrame:
     return counts
 
 
-def filter_low_expression(counts: pd.DataFrame, min_count: int = 10, min_samples: int = 1) -> pd.DataFrame:
-    """Keep a gene only if at least `min_samples` columns clear `min_count`."""
-    mask = (counts >= min_count).sum(axis=1) >= min_samples
-    print(f"Filtered {(~mask).sum()} / {len(counts)} genes below threshold "
-          f"(min_count={min_count}, min_samples={min_samples})")
-    return counts[mask]
-
-
 def normalize_cpm(counts: pd.DataFrame) -> pd.DataFrame:
     """Counts per million, using library size from the raw counts matrix."""
     lib_sizes = counts.sum(axis=0)
@@ -47,11 +39,9 @@ if __name__ == "__main__":
     print(f"\nTotal counts per sample:\n{counts.sum(axis=0)}")
     print(f"\nGenes with nonzero counts: {(counts.sum(axis=1) > 0).sum()} / {len(counts)}")
 
-    filtered = filter_low_expression(counts, min_count=10, min_samples=1)
-    cpm = normalize_cpm(filtered)
+    cpm = normalize_cpm(counts)
     log_cpm = log_transform(cpm)
 
-    print(f"\nFiltered shape: {filtered.shape}")
     print(f"\nCPM (nonzero genes):\n{cpm[cpm.sum(axis=1) > 0]}")
     print(f"\nLog2(CPM+1) (nonzero genes):\n{log_cpm[cpm.sum(axis=1) > 0]}")
 

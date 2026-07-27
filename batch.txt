@@ -1,1 +1,1 @@
-HG00109	/Users/poojaparthasarathy/Documents/GHOSH_LAB_Pooja/Tooling/testfq/HG00109_1.fastq	/Users/poojaparthasarathy/Documents/GHOSH_LAB_Pooja/Tooling/testfq/HG00109_2.fastq
+HG00109	/Users/poojaparthasarathy/Documents/GHOSH_LAB_Pooja/RAW2COMPASS Tooling/testfq/HG00109_1.fastq	/Users/poojaparthasarathy/Documents/GHOSH_LAB_Pooja/RAW2COMPASS Tooling/testfq/HG00109_2.fastq
