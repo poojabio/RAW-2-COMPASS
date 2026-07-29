@@ -98,7 +98,7 @@ def ref_builder(species: str) -> tuple[str, str]:
         "-f1", cdna_file,
         "--kallisto", KALLISTO,
         "--bustools", BUSTOOLS,
-        "-t", "8",
+        "-t", "4",
         *gget_out
     ], cwd=work_dir, check=True)
 
@@ -109,6 +109,63 @@ def ref_builder(species: str) -> tuple[str, str]:
     return str(work_dir / index_file), str(work_dir / t2g_file)
 
 
+##trying with cdna to minimize RAM usage
+CDNA_URLS = {
+    "human": "https://ftp.ensembl.org/pub/release-110/fasta/homo_sapiens/cdna/Homo_sapiens.GRCh38.cdna.all.fa.gz",
+    "mouse": "https://ftp.ensembl.org/pub/release-110/fasta/mus_musculus/cdna/Mus_musculus.GRCm39.cdna.all.fa.gz",
+}
+
+def ref_builder_cdna(species: str) -> tuple[str, str]:
+    """
+    Fast path: builds index directly from a pre-made cDNA transcript FASTA
+    (e.g. Ensembl's cdna.all.fa.gz), skipping genome+GTF splitting entirely.
+    Uses --workflow=custom under kb ref. Currently human/mouse only.
+    """
+    print("Hello! Starting cDNA Reference Build")
+    start = time.time()
+
+    species = species.strip().lower()
+    species = ALIASES.get(species, species)
+
+    if species not in CDNA_URLS:
+        raise ValueError(
+            f"'{species}' not supported by ref_builder_cdna yet "
+            f"(only {sorted(CDNA_URLS)}). Use ref_builder() instead for other species."
+        )
+
+    work_dir = Path("kb_work")
+    work_dir.mkdir(exist_ok=True)
+    index_file = f"{species}_index.idx"
+    t2g_file = f"{species}_t2g.txt"
+
+    if (work_dir / index_file).exists() and (work_dir / t2g_file).exists():
+        print(f"Reference for {species} already built — skipping.")
+        return str(work_dir / index_file), str(work_dir / t2g_file)
+
+    cdna_fasta = work_dir / Path(CDNA_URLS[species]).name
+    if not cdna_fasta.exists():
+        print(f"Downloading cDNA FASTA for {species}...")
+        subprocess.run(["curl", "-L", "-o", str(cdna_fasta), CDNA_URLS[species]], check=True)
+
+    subprocess.run([
+        "kb", "ref",
+        "--workflow=custom",
+        "-i", index_file,
+        "-g", t2g_file,
+        "--kallisto", KALLISTO,
+        "-t" , "8",
+        str(cdna_fasta.resolve()),
+    ], cwd=work_dir, check=True)
+
+    elapsed = time.time() - start
+    print("Done! cDNA Reference Build")
+    print(f"Took {elapsed:.1f} seconds")
+
+    return str(work_dir / index_file), str(work_dir / t2g_file)
+
+
+
+### FILE PAIR IDENTIFICATION AND DOWNSTREAM 
 def find_file_pairs(folder: Path) -> tuple[dict, list]:
     """
     Scans `folder` for paired fastqs. Returns (paired, unpaired).
@@ -159,9 +216,8 @@ def find_file_pairs(folder: Path) -> tuple[dict, list]:
 
 def pair_selected_files(file_paths: list[Path]) -> tuple[dict, list]:
     """
-    Same pairing logic as find_file_pairs, but operates on an explicit
-    list of files (e.g. from a multi-select file dialog) instead of
-    scanning an entire folder.
+    Pairs files from an explicit selection (e.g. multi-select file dialog).
+    Two-pass: find all valid pairs first, then anything not claimed is unpaired.
     """
     PAIR_PATTERNS = [
         ("_R1", "_R2"),
@@ -172,14 +228,11 @@ def pair_selected_files(file_paths: list[Path]) -> tuple[dict, list]:
 
     file_set = {Path(f) for f in file_paths}
     paired = {}
-    unpaired = []
     claimed = set()
 
     for file in file_set:
         if file in claimed:
             continue
-
-        matched = False
         for fwd_token, rev_token in PAIR_PATTERNS:
             if fwd_token in file.name:
                 rev_name = file.name.replace(fwd_token, rev_token)
@@ -189,12 +242,9 @@ def pair_selected_files(file_paths: list[Path]) -> tuple[dict, list]:
                     paired[sample] = (file, rev)
                     claimed.add(file)
                     claimed.add(rev)
-                    matched = True
                 break
 
-        if not matched and file not in claimed:
-            unpaired.append(file)
-
+    unpaired = [f for f in file_set if f not in claimed]
     return paired, unpaired
 
 

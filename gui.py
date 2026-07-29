@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QThread, Signal, Qt
 
-from kb_script import get_reference, pair_selected_files, selected_files_as_singles, run_count
+from kb_script import ref_builder_cdna, pair_selected_files, selected_files_as_singles, run_count
 from matrix import load_kb_counts, normalize_cpm, log_transform, batch_correct, export_matrix
 
 NAVY = "#0F2B46"
@@ -78,7 +78,7 @@ class PipelineWorker(QThread):
     def run(self):
         try:
             self.progress.emit("Fetching reference index...")
-            index, t2g = get_reference(self.species)
+            index, t2g = ref_builder_cdna(self.species)
 
             self.progress.emit("Running kb count (this may take a while)...")
             out_dir = run_count(self.samples, index, t2g, parity=self.parity)
@@ -249,7 +249,6 @@ class MainWindow(QMainWindow):
         self.status_log.append(f"Error: {error_msg}")
         self.run_btn.setEnabled(True)
 
-    # ---------- Batch Correction tab (scaffold — not yet functional) ----------
     def _build_results_panel(self) -> QWidget:
         panel = QWidget()
         layout = QVBoxLayout()
@@ -268,6 +267,13 @@ class MainWindow(QMainWindow):
         self.load_results_btn.setObjectName("secondary")
         self.load_results_btn.clicked.connect(self._load_results)
         layout.addWidget(self.load_results_btn, alignment=Qt.AlignLeft)
+
+        # --- NEW: preview table goes here ---
+        layout.addWidget(QLabel("Preview (first 20 genes)"))
+        self.preview_table = QTableWidget(0, 0)
+        self.preview_table.setMaximumHeight(300)
+        layout.addWidget(self.preview_table)
+        # --- end new ---
 
         self.batch_correct_checkbox = QCheckBox("Apply batch correction (ComBat)")
         self.batch_correct_checkbox.stateChanged.connect(self._toggle_batch_table)
@@ -304,10 +310,31 @@ class MainWindow(QMainWindow):
         try:
             counts = load_kb_counts(Path("counts_out/counts_unfiltered"))
             self._loaded_counts = counts
-            self.results_log.append(f"Loaded {counts.shape[0]} genes x {counts.shape[1]} samples.")
+
+            n_genes, n_samples = counts.shape
+            n_nonzero = (counts.values != 0).sum()
+            pct_nonzero = 100 * n_nonzero / counts.size if counts.size else 0
+            top_genes = counts.sum(axis=1).sort_values(ascending=False).head(5)
+
+            self.results_log.clear()
+            self.results_log.append(f"Loaded {n_genes} genes x {n_samples} sample(s)")
+            self.results_log.append(f"Non-zero entries: {pct_nonzero:.1f}%")
+            self.results_log.append("Top expressed genes:")
+            for gene, val in top_genes.items():
+                self.results_log.append(f"  {gene}: {val:.1f}")
+
+            self._populate_preview_table(counts.head(20))
         except Exception as e:
             self.results_log.append(f"Error loading counts: {e}")
 
+    def _populate_preview_table(self, df):
+        self.preview_table.setRowCount(df.shape[0])
+        self.preview_table.setColumnCount(df.shape[1])
+        self.preview_table.setHorizontalHeaderLabels([str(c) for c in df.columns])
+        self.preview_table.setVerticalHeaderLabels([str(i) for i in df.index])
+        for i, (_, row) in enumerate(df.iterrows()):
+            for j, val in enumerate(row):
+                self.preview_table.setItem(i, j, QTableWidgetItem(f"{val:.1f}"))
     def _run_normalization(self):
         if not hasattr(self, "_loaded_counts"):
             QMessageBox.warning(self, "No data", "Load counts before normalizing.")
