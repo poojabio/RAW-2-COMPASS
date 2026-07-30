@@ -297,6 +297,7 @@ def run_count(samples: dict, index: str, t2g: str, parity: str = "paired",
     print("Hello! Beginning Run Count function")
     start = time.time()
 
+    
     batch_file = write_batch_file(samples, work_dir / "batch.txt", parity)
     out_dir = work_dir / "counts_out"
 
