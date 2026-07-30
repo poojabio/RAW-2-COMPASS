@@ -1,7 +1,9 @@
+import sys
 import subprocess
 from pathlib import Path
 import time
 import shutil
+import gzip
 
 
 def find_binary(name):
@@ -14,8 +16,19 @@ def find_binary(name):
     return path
 
 
-KALLISTO = find_binary("kallisto")
-BUSTOOLS = find_binary("bustools")
+if getattr(sys, 'frozen', False):
+    # Packaged app: use bundled binaries, fixed data directory
+    BUNDLE_DIR = Path(sys._MEIPASS)
+    KALLISTO = str(BUNDLE_DIR / "bin" / "kallisto")
+    BUSTOOLS = str(BUNDLE_DIR / "bin" / "bustools")
+    APP_DATA_DIR = Path.home() / "RAW2Compass_data"
+else:
+    # Dev mode: same as before
+    KALLISTO = find_binary("kallisto")
+    BUSTOOLS = find_binary("bustools")
+    APP_DATA_DIR = Path(__file__).resolve().parent
+
+APP_DATA_DIR.mkdir(exist_ok=True)
 
 ALIASES = {
     "homo_sapiens": "human",
@@ -115,6 +128,29 @@ CDNA_URLS = {
     "mouse": "https://ftp.ensembl.org/pub/release-110/fasta/mus_musculus/cdna/Mus_musculus.GRCm39.cdna.all.fa.gz",
 }
 
+
+def _build_t2g_from_cdna(cdna_fasta: Path, t2g_out: Path) -> None:
+    """
+    Extracts transcript_id / gene_id / gene_name from Ensembl cDNA FASTA
+    headers directly, since --workflow=custom doesn't generate t2g.txt.
+    """
+    with gzip.open(cdna_fasta, "rt") as f, open(t2g_out, "w") as out:
+        for line in f:
+            if not line.startswith(">"):
+                continue
+            fields = line[1:].split()
+            tx = fields[0]
+            gene = ""
+            symbol = ""
+            for field in fields:
+                if field.startswith("gene:"):
+                    gene = field.split(":", 1)[1]
+                elif field.startswith("gene_symbol:"):
+                    symbol = field.split(":", 1)[1]
+            out.write(f"{tx}\t{gene}\t{symbol}\n")
+
+
+
 def ref_builder_cdna(species: str) -> tuple[str, str]:
     """
     Fast path: builds index directly from a pre-made cDNA transcript FASTA
@@ -133,19 +169,23 @@ def ref_builder_cdna(species: str) -> tuple[str, str]:
             f"(only {sorted(CDNA_URLS)}). Use ref_builder() instead for other species."
         )
 
-    work_dir = Path("kb_work")
+    work_dir = APP_DATA_DIR / "kb_work"
     work_dir.mkdir(exist_ok=True)
     index_file = f"{species}_index.idx"
     t2g_file = f"{species}_t2g.txt"
 
-    if (work_dir / index_file).exists() and (work_dir / t2g_file).exists():
+    index_path = work_dir / index_file
+    t2g_path = work_dir / t2g_file
+
+    if index_path.exists() and t2g_path.exists() and t2g_path.stat().st_size > 0:
         print(f"Reference for {species} already built — skipping.")
-        return str(work_dir / index_file), str(work_dir / t2g_file)
+        return str(index_path), str(t2g_path)
 
     cdna_fasta = work_dir / Path(CDNA_URLS[species]).name
     if not cdna_fasta.exists():
         print(f"Downloading cDNA FASTA for {species}...")
         subprocess.run(["curl", "-L", "-o", str(cdna_fasta), CDNA_URLS[species]], check=True)
+
 
     subprocess.run([
         "kb", "ref",
@@ -156,6 +196,10 @@ def ref_builder_cdna(species: str) -> tuple[str, str]:
         "-t" , "8",
         str(cdna_fasta.resolve()),
     ], cwd=work_dir, check=True)
+
+    if not t2g_path.exists() or t2g_path.stat().st_size == 0:
+        print("Generating transcript-to-gene mapping from FASTA headers...")
+        _build_t2g_from_cdna(cdna_fasta, t2g_path)
 
     elapsed = time.time() - start
     print("Done! cDNA Reference Build")
@@ -289,12 +333,17 @@ def write_batch_file(samples: dict, out_path: Path, parity: str) -> Path:
 
 
 def run_count(samples: dict, index: str, t2g: str, parity: str = "paired",
-              work_dir: Path = Path(".")) -> Path:
+              work_dir: Path=None) -> Path:
     """
     parity: "paired" or "single" — samples dict shape must match (see write_batch_file).
     Returns the output directory path.
     """
     print("Hello! Beginning Run Count function")
+
+    if work_dir is None:
+        work_dir = APP_DATA_DIR / "counts_out_workdir"
+        work_dir.mkdir(exist_ok=True)
+
     start = time.time()
 
     
