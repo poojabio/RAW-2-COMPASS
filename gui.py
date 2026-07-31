@@ -8,8 +8,8 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import QThread, Signal, Qt
 
-from kb_script import ref_builder_cdna, pair_selected_files, selected_files_as_singles, run_count
-from matrix import load_kb_counts, normalize_cpm, log_transform, batch_correct, export_matrix
+from kb_script import ref_builder_cdna, pair_selected_files, selected_files_as_singles, run_count, APP_DATA_DIR
+from matrix import load_kb_counts, normalize_cpm, log_transform, export_matrix
 
 NAVY = "#0F2B46"
 ACCENT_BLUE = "#2E5FA3"
@@ -275,15 +275,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.preview_table)
         # --- end new ---
 
-        self.batch_correct_checkbox = QCheckBox("Apply batch correction (ComBat)")
-        self.batch_correct_checkbox.stateChanged.connect(self._toggle_batch_table)
-        layout.addWidget(self.batch_correct_checkbox)
-
-        self.results_batch_table = QTableWidget(0, 2)
-        self.results_batch_table.setHorizontalHeaderLabels(["Sample", "Batch"])
-        self.results_batch_table.setVisible(False)
-        layout.addWidget(self.results_batch_table)
-
         self.export_btn = QPushButton("Normalize + Export  →")
         self.export_btn.clicked.connect(self._run_normalization)
         layout.addWidget(self.export_btn, alignment=Qt.AlignLeft)
@@ -308,7 +299,8 @@ class MainWindow(QMainWindow):
 
     def _load_results(self):
         try:
-            counts = load_kb_counts(Path("counts_out/counts_unfiltered"))
+            counts_dir = APP_DATA_DIR / "counts_out_workdir" / "counts_out" / "counts_unfiltered"
+            counts = load_kb_counts(counts_dir)
             self._loaded_counts = counts
 
             n_genes, n_samples = counts.shape
@@ -335,6 +327,7 @@ class MainWindow(QMainWindow):
         for i, (_, row) in enumerate(df.iterrows()):
             for j, val in enumerate(row):
                 self.preview_table.setItem(i, j, QTableWidgetItem(f"{val:.1f}"))
+
     def _run_normalization(self):
         if not hasattr(self, "_loaded_counts"):
             QMessageBox.warning(self, "No data", "Load counts before normalizing.")
@@ -344,24 +337,9 @@ class MainWindow(QMainWindow):
             cpm = normalize_cpm(self._loaded_counts)
             log_cpm = log_transform(cpm)
 
-            if self.batch_correct_checkbox.isChecked():
-                batch_labels = {}
-                for row in range(self.results_batch_table.rowCount()):
-                    sample_id = self.results_batch_table.item(row, 0).text()
-                    batch_item = self.results_batch_table.item(row, 1)
-                    batch_labels[sample_id] = batch_item.text() if batch_item else ""
-
-                if any(not b for b in batch_labels.values()):
-                    QMessageBox.warning(self, "Missing batch labels",
-                                        "Assign a batch to every sample before correcting.")
-                    return
-
-                self.results_log.append("Applying batch correction...")
-                log_cpm = batch_correct(log_cpm, batch_labels)
-
-            export_matrix(cpm, Path("cpm_matrix.csv"))
-            export_matrix(log_cpm, Path("log_cpm_matrix.csv"))
-            self.results_log.append("Exported cpm_matrix.csv and log_cpm_matrix.csv")
+            export_matrix(cpm, APP_DATA_DIR / "cpm_matrix.csv")
+            export_matrix(log_cpm, APP_DATA_DIR / "log_cpm_matrix.csv")
+            self.results_log.append(f"Exported to {APP_DATA_DIR}")
 
         except Exception as e:
             self.results_log.append(f"Error: {e}")

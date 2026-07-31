@@ -5,6 +5,8 @@ import time
 import shutil
 import gzip
 
+KB_CMD = [sys.executable, "-m", "kb_python.main"]
+
 
 def find_binary(name):
     path = shutil.which(name)
@@ -188,7 +190,7 @@ def ref_builder_cdna(species: str) -> tuple[str, str]:
 
 
     subprocess.run([
-        "kb", "ref",
+        *KB_CMD, "ref",
         "--workflow=custom",
         "-i", index_file,
         "-g", t2g_file,
@@ -351,7 +353,7 @@ def run_count(samples: dict, index: str, t2g: str, parity: str = "paired",
     out_dir = work_dir / "counts_out"
 
     subprocess.run([
-        "kb", "count",
+        *KB_CMD, "count",
         "-i", index,
         "-g", t2g,
         "-x", "BULK",
