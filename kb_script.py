@@ -5,8 +5,7 @@ import time
 import shutil
 import gzip
 
-KB_CMD = [sys.executable, "-m", "kb_python.main"]
-
+#KB_CMD = [sys.executable, "-m", "kb_python.main"]
 
 def find_binary(name):
     path = shutil.which(name)
@@ -17,6 +16,7 @@ def find_binary(name):
         )
     return path
 
+KB_CMD = [find_binary("kb")]
 
 if getattr(sys, 'frozen', False):
     # Packaged app: use bundled binaries, fixed data directory
@@ -373,6 +373,6 @@ def run_count(samples: dict, index: str, t2g: str, parity: str = "paired",
 
 if __name__ == "__main__":
     # CLI test path — mirrors what gui.py will eventually call
-    index, t2g = get_reference("human")
+    index, t2g = ref_builder_cdna("human")
     paired, unpaired = find_file_pairs(Path("testfq"))
     run_count(paired, index, t2g, parity="paired")
