@@ -1,8 +1,12 @@
+from ast import arg
 import scipy.io
 import numpy as np
 import pandas as pd
 from pathlib import Path
+import argparse
 from inmoose.pycombat import pycombat_norm
+from kb_script import APP_DATA_DIR
+
 
 
 def load_kb_counts(counts_dir: Path) -> pd.DataFrame:
@@ -56,7 +60,10 @@ def export_matrix(df: pd.DataFrame, out_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    counts = load_kb_counts(Path("counts_out/counts_unfiltered"))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--counts-dir", default= APP_DATA_DIR/"counts_out_workdir/counts_out/counts_unfiltered")
+    args = parser.parse_args()
+    counts = load_kb_counts(Path(args.counts_dir))
 
     print(f"Shape: {counts.shape[0]} genes x {counts.shape[1]} samples")
     print(f"\nTotal counts per sample:\n{counts.sum(axis=0)}")

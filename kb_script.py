@@ -2,134 +2,29 @@ import sys
 import subprocess
 from pathlib import Path
 import time
+#import gget
+import argparse
 import shutil
 import gzip
-
-#KB_CMD = [sys.executable, "-m", "kb_python.main"]
 
 def find_binary(name):
     path = shutil.which(name)
     if path is None:
         raise RuntimeError(
-            f"{name} not found. Install with:\n"
-            f"  conda install -c conda-forge -c bioconda {name}"
+            f"{name} not found. Check /bin folder wraps + installs"
         )
     return path
 
-KB_CMD = [find_binary("kb")]
+#KB_CMD = [find_binary("kb")]
 
-if getattr(sys, 'frozen', False):
-    # Packaged app: use bundled binaries, fixed data directory
-    BUNDLE_DIR = Path(sys._MEIPASS)
-    KALLISTO = str(BUNDLE_DIR / "bin" / "kallisto")
-    BUSTOOLS = str(BUNDLE_DIR / "bin" / "bustools")
-    APP_DATA_DIR = Path.home() / "RAW2Compass_data"
-else:
-    # Dev mode: same as before
-    KALLISTO = find_binary("kallisto")
-    BUSTOOLS = find_binary("bustools")
-    APP_DATA_DIR = Path(__file__).resolve().parent
+bin_dir = Path(__file__).resolve().parent/ "bin"
+KALLISTO = find_binary(bin_dir/"kallisto")
+BUSTOOLS = find_binary(bin_dir/"bustools")
+APP_DATA_DIR = Path(__file__).resolve().parent
+
+KB_CMD = [sys.executable, "-m", "kb_python.main"]
 
 APP_DATA_DIR.mkdir(exist_ok=True)
-
-ALIASES = {
-    "homo_sapiens": "human",
-    "mus_musculus": "mouse",
-    "canis_lupus_familiaris": "dog",
-    "macaca_mulatta": "monkey",
-    "danio_rerio": "zebrafish",
-}
-
-SUPPORTED_SPECIES = {"human", "mouse", "dog", "monkey", "zebrafish"}
-
-
-def get_reference(species: str, work_dir: Path = Path("kb_work")) -> tuple[str, str]:
-    """
-    Checks for a locally cached prebuilt index; downloads via kb-python's
-    -d flag (pachterlab/kallisto-transcriptome-indices) if missing.
-    Fast — no genome build, just a direct download.
-    """
-    species = species.strip().lower()
-    species = ALIASES.get(species, species)  # accepts either style of name
-
-    if species not in SUPPORTED_SPECIES:
-        raise ValueError(
-            f"'{species}' not in prebuilt list: {sorted(SUPPORTED_SPECIES)}. "
-            f"Use ref_builder() to build a custom index instead."
-        )
-
-    work_dir.mkdir(exist_ok=True)
-    index_file = work_dir / f"{species}_index.idx"
-    t2g_file = work_dir / f"{species}_t2g.txt"
-
-    if index_file.exists() and t2g_file.exists():
-        print(f"Using cached prebuilt index for {species}.")
-        return str(index_file), str(t2g_file)
-
-    print(f"Downloading prebuilt index for {species}")
-    subprocess.run([
-        "kb", "ref",
-        "-d", species,
-        "-i", str(index_file),
-        "-g", str(t2g_file),
-        "--kallisto", KALLISTO,
-        "--bustools", BUSTOOLS,
-    ], check=True)
-
-    return str(index_file), str(t2g_file)
-
-
-def ref_builder(species: str) -> tuple[str, str]:
-    """
-    Fallback for species NOT in the prebuilt list — builds from scratch via
-    gget + kb ref. Slow (~20+ min). Only call this if get_reference() raises.
-    """
-    print("Hello! Starting Reference Transcript Build")
-    start = time.time()
-
-    species = species.strip().lower()
-    index_file = f"{species}_index.idx"
-    t2g_file = f"{species}_t2g.txt"
-    cdna_file = f"{species}_cdna.fasta"
-
-    work_dir = Path("kb_work")
-    work_dir.mkdir(exist_ok=True)
-
-    if (work_dir / index_file).exists() and (work_dir / t2g_file).exists():
-        print(f"Reference for {species} already built — skipping.")
-        return str(work_dir / index_file), str(work_dir / t2g_file)
-
-    transcript_gget = subprocess.run(
-        ["gget", "ref", "--ftp", "-w", "dna,gtf", species],
-        capture_output=True, text=True, check=True,
-    )
-    gget_out = transcript_gget.stdout.split()
-
-    shutil.rmtree(work_dir / "tmp", ignore_errors=True)
-    subprocess.run([
-        "kb", "ref",
-        "-i", index_file,
-        "-g", t2g_file,
-        "-f1", cdna_file,
-        "--kallisto", KALLISTO,
-        "--bustools", BUSTOOLS,
-        "-t", "4",
-        *gget_out
-    ], cwd=work_dir, check=True)
-
-    elapsed = time.time() - start
-    print("Done! Reference Transcript Build")
-    print(f"Took {elapsed:.1f} seconds")
-
-    return str(work_dir / index_file), str(work_dir / t2g_file)
-
-
-##trying with cdna to minimize RAM usage
-CDNA_URLS = {
-    "human": "https://ftp.ensembl.org/pub/release-110/fasta/homo_sapiens/cdna/Homo_sapiens.GRCh38.cdna.all.fa.gz",
-    "mouse": "https://ftp.ensembl.org/pub/release-110/fasta/mus_musculus/cdna/Mus_musculus.GRCm39.cdna.all.fa.gz",
-}
-
 
 def _build_t2g_from_cdna(cdna_fasta: Path, t2g_out: Path) -> None:
     """
@@ -151,9 +46,7 @@ def _build_t2g_from_cdna(cdna_fasta: Path, t2g_out: Path) -> None:
                     symbol = field.split(":", 1)[1]
             out.write(f"{tx}\t{gene}\t{symbol}\n")
 
-
-
-def ref_builder_cdna(species: str) -> tuple[str, str]:
+def ref_builder_cdna(species: str) -> tuple[str, str]: ##homo_sapiens, mus_musculus, perhaps integrate zebrafish later too
     """
     Fast path: builds index directly from a pre-made cDNA transcript FASTA
     (e.g. Ensembl's cdna.all.fa.gz), skipping genome+GTF splitting entirely.
@@ -162,32 +55,38 @@ def ref_builder_cdna(species: str) -> tuple[str, str]:
     print("Hello! Starting cDNA Reference Build")
     start = time.time()
 
-    species = species.strip().lower()
-    species = ALIASES.get(species, species)
-
-    if species not in CDNA_URLS:
-        raise ValueError(
-            f"'{species}' not supported by ref_builder_cdna yet "
-            f"(only {sorted(CDNA_URLS)}). Use ref_builder() instead for other species."
-        )
-
     work_dir = APP_DATA_DIR / "kb_work"
-    work_dir.mkdir(exist_ok=True)
+    work_dir.mkdir(exist_ok=True) ## if it exists it is idempotent
     index_file = f"{species}_index.idx"
     t2g_file = f"{species}_t2g.txt"
 
     index_path = work_dir / index_file
     t2g_path = work_dir / t2g_file
 
-    if index_path.exists() and t2g_path.exists() and t2g_path.stat().st_size > 0:
+    if index_path.exists() and t2g_path.exists() and t2g_path.stat().st_size > 0: ##existing files and checking size for nonemptiness
         print(f"Reference for {species} already built — skipping.")
         return str(index_path), str(t2g_path)
 
-    cdna_fasta = work_dir / Path(CDNA_URLS[species]).name
+    result = subprocess.run(
+                ["gget",
+                 "ref",
+                 "--ftp",
+                 "-w",
+                 "cdna",
+                 species
+                ],check=True,capture_output=True, text=True)
+
+    cdna_url = result.stdout.strip()
+    cdna_fasta = work_dir / Path(cdna_url).name
     if not cdna_fasta.exists():
         print(f"Downloading cDNA FASTA for {species}...")
-        subprocess.run(["curl", "-L", "-o", str(cdna_fasta), CDNA_URLS[species]], check=True)
-
+        subprocess.run(["curl", 
+                        "-L", 
+                        "-o", 
+                        str(cdna_fasta),
+                        cdna_url],
+                        check=True)
+        
 
     subprocess.run([
         *KB_CMD, "ref",
@@ -211,7 +110,7 @@ def ref_builder_cdna(species: str) -> tuple[str, str]:
 
 
 
-### FILE PAIR IDENTIFICATION AND DOWNSTREAM 
+### FILE PAIR IDENTIFICATION AND DOWNSTREAM COUNTS FORMATION
 def find_file_pairs(folder: Path) -> tuple[dict, list]:
     """
     Scans `folder` for paired fastqs. Returns (paired, unpaired).
@@ -241,10 +140,10 @@ def find_file_pairs(folder: Path) -> tuple[dict, list]:
         matched = False
         for fwd_token, rev_token in PAIR_PATTERNS:
             if fwd_token in file.name:
-                rev_name = file.name.replace(fwd_token, rev_token)
+                rev_name = file.name.replace(fwd_token, rev_token) ##CREATING REV TOKEN TO SEARCH WITH
                 rev = file.parent / rev_name
                 if rev.exists():
-                    sample = file.name[:file.name.find(fwd_token)]
+                    sample = file.name[:file.name.find(fwd_token)] ##Splicing filename 
                     paired[sample] = (file, rev)
                     matched = True
                 break  # stop checking other patterns once one token matches
@@ -372,7 +271,34 @@ def run_count(samples: dict, index: str, t2g: str, parity: str = "paired",
 
 
 if __name__ == "__main__":
-    # CLI test path — mirrors what gui.py will eventually call
-    index, t2g = ref_builder_cdna("human")
-    paired, unpaired = find_file_pairs(Path("testfq"))
-    run_count(paired, index, t2g, parity="paired")
+    # CLI test path — mirrors what gui.py will eventually call to handle any CLIs and specs
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--species", default="homo_sapiens")
+    parser.add_argument("--parity", default="paired", choices=["single", "paired"])
+    
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--fastq-dir")
+    group.add_argument("--files", nargs="+") ##file paths as a whole one after another 
+    
+    args = parser.parse_args()
+
+    index, t2g = ref_builder_cdna(species=args.species)
+
+    if args.parity == "paired":
+        if args.fastq_dir is not None:
+            paired,unpaired = find_file_pairs(Path(args.fastq_dir))
+            run_count(paired, index, t2g, parity=args.parity)
+        else:
+            pairs,unpaired = pair_selected_files(args.files)
+            run_count(pairs, index, t2g, parity=args.parity)
+
+    if args.parity == "single":
+        if args.fastq_dir is not None:
+            singles = find_single_files(Path(args.fastq_dir))
+            run_count(singles , index, t2g, parity=args.parity)
+        else:
+            singular = selected_files_as_singles(args.files)
+            run_count(singular , index, t2g, parity=args.parity)
+
+
