@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 import argparse
-from inmoose.pycombat import pycombat_norm
+#from inmoose.pycombat import pycombat_norm
 from kb_script import APP_DATA_DIR
 
 
@@ -30,28 +30,6 @@ def normalize_cpm(counts: pd.DataFrame) -> pd.DataFrame:
 
 def log_transform(cpm: pd.DataFrame, pseudocount: float = 1.0) -> pd.DataFrame:
     return np.log2(cpm + pseudocount)
-
-
-def batch_correct(log_cpm: pd.DataFrame, batch_labels: dict) -> pd.DataFrame:
-    """
-    Optional step — only called if the user opts in.
-    batch_labels: {sample_id: batch_name}, must cover every column in log_cpm.
-    Requires at least 2 samples per batch to estimate anything meaningful.
-    """
-    missing = set(log_cpm.columns) - set(batch_labels.keys())
-    if missing:
-        raise ValueError(f"Missing batch label for samples: {missing}")
-
-    batch = pd.Series(batch_labels)[log_cpm.columns]
-
-    batch_counts = batch.value_counts()
-    if (batch_counts < 2).any():
-        raise ValueError(
-            f"Each batch needs >=2 samples to correct. Got: {batch_counts.to_dict()}"
-        )
-
-    corrected = pycombat_norm(log_cpm, batch)
-    return corrected
 
 
 def export_matrix(df: pd.DataFrame, out_path: Path) -> None:
