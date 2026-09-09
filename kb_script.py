@@ -285,17 +285,22 @@ if __name__ == "__main__":
     # CLI test path — mirrors what gui.py will eventually call to handle any CLIs and specs
     parser = argparse.ArgumentParser()
 
+    #species and parity 
     parser.add_argument("--species", default="homo_sapiens")
     parser.add_argument("--parity", default="paired", choices=["single", "paired"])
-    
+
+    #fastq and files 
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--fastq-dir")
     group.add_argument("--files", nargs="+") ##file paths as a whole one after another 
-    
+
+    #parser object gets created
     args = parser.parse_args()
 
+    #calling ref builder
     index, t2g = ref_builder_cdna(species=args.species)
 
+    ##paired vs unpaied files
     if args.parity == "paired":
         if args.fastq_dir is not None:
             paired,unpaired = find_file_pairs(Path(args.fastq_dir))
