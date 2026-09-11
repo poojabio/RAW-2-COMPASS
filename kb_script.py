@@ -23,7 +23,7 @@ def find_binary(name, base_dir):
         return path
     raise RuntimeError(f"{name} not found in bin/ or PATH")
 
-BASE_DIR = Path(__file__).resolve().parent.parent ##absolute path 2 levels above the scripts (src > raw2compass)
+BASE_DIR = Path(__file__).resolve().parent.parent ##absolute path 2 levels above the scripts (script > wrapped scripts folder > raw2compass then cue search)
 
 KALLISTO = find_binary("kallisto", BASE_DIR)
 BUSTOOLS = find_binary("bustools", BASE_DIR)
@@ -40,11 +40,15 @@ print("  WORKDIR :", APP_DATA_DIR)
 def _build_t2g_from_cdna(cdna_fasta: Path, t2g_out: Path) -> None:
     """
     Extracts transcript_id / gene_id / gene_name from Ensembl cDNA FASTA
-    headers directly, since --workflow=custom doesn't generate t2g.txt.
+    headers directly, since --workflow=custom doesn't generate t2g.txt. this is used for generation and matching
+
+    file format is > header  followed by 
+    Trascript ID | cDNA | Location | Gene Name | Gene Symbol | may have descriptions
     """
-    with gzip.open(cdna_fasta, "rt") as f, open(t2g_out, "w") as out:
+
+    with gzip.open(cdna_fasta, "rt") as f, open(t2g_out, "w") as out: #read cdna and write t2g
         for line in f:
-            if not line.startswith(">"):
+            if not line.startswith(">"): #group per fasta header
                 continue
             fields = line[1:].split()
             tx = fields[0]
@@ -66,7 +70,7 @@ def ref_builder_cdna(species: str) -> tuple[str, str]: ##homo_sapiens, mus_muscu
     print("Hello! Starting cDNA Reference Build")
     start = time.time()
 
-    work_dir = APP_DATA_DIR / "kb_work"
+    work_dir = APP_DATA_DIR / "kb_work" ## hsould house the index file
     work_dir.mkdir(exist_ok=True) ## if it exists it is idempotent
     index_file = f"{species}_index.idx"
     t2g_file = f"{species}_t2g.txt"
@@ -264,13 +268,13 @@ def run_count(samples: dict, index: str, t2g: str, parity: str = "paired",
 
     subprocess.run([
         *KB_CMD, "count",
+        "-x", "BULK",
         "-i", index,
         "-g", t2g,
-        "-x", "BULK",
         "--parity", parity,
         "-o", str(out_dir),
         "--kallisto", KALLISTO,
-        "--bustools", BUSTOOLS,
+        "--matrix-to-files",
         "-t", "8",
         str(batch_file),
     ], check=True, cwd=work_dir)
