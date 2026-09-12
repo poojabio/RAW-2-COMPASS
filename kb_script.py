@@ -61,17 +61,18 @@ def _build_t2g_from_cdna(cdna_fasta: Path, t2g_out: Path) -> None:
                     symbol = field.split(":", 1)[1]
             out.write(f"{tx}\t{gene}\t{symbol}\n")
 
-def ref_builder_cdna(species: str) -> tuple[str, str]: ##homo_sapiens, mus_musculus, perhaps integrate zebrafish later too
+def ref_builder_cdna(species: str) -> tuple[str, str]: 
     """
     Fast path: builds index directly from a pre-made cDNA transcript FASTA
     (e.g. Ensembl's cdna.all.fa.gz), skipping genome+GTF splitting entirely.
-    Uses --workflow=custom under kb ref. Currently human/mouse only.
+    Uses --workflow=custom under kb ref since its based on the ensembl fasta file
     """
     print("Hello! Starting cDNA Reference Build")
     start = time.time()
 
     work_dir = APP_DATA_DIR / "kb_work" ## hsould house the index file
     work_dir.mkdir(exist_ok=True) ## if it exists it is idempotent
+
     index_file = f"{species}_index.idx"
     t2g_file = f"{species}_t2g.txt"
 
@@ -93,6 +94,7 @@ def ref_builder_cdna(species: str) -> tuple[str, str]: ##homo_sapiens, mus_muscu
 
     cdna_url = result.stdout.strip()
     cdna_fasta = work_dir / Path(cdna_url).name
+
     if not cdna_fasta.exists():
         print(f"Downloading cDNA FASTA for {species}...")
         subprocess.run(["curl", 
@@ -101,21 +103,19 @@ def ref_builder_cdna(species: str) -> tuple[str, str]: ##homo_sapiens, mus_muscu
                         str(cdna_fasta),
                         cdna_url],
                         check=True)
-        
-
-    subprocess.run([
-        *KB_CMD, "ref",
-        "--workflow=custom",
-        "-i", index_file,
-        "-g", t2g_file,
-        "--kallisto", KALLISTO,
-        "-t" , "8",
-        str(cdna_fasta.resolve()),
-    ], cwd=work_dir, check=True)
 
     if not t2g_path.exists() or t2g_path.stat().st_size == 0:
         print("Generating transcript-to-gene mapping from FASTA headers...")
         _build_t2g_from_cdna(cdna_fasta, t2g_path)
+
+    print("kallisto index running...")
+    subprocess.run([
+        KALLISTO, 
+        "index",
+        "-i", index_file,
+        str(cdna_fasta.resolve()),
+    ], cwd=work_dir, check=True)
+
 
     elapsed = time.time() - start
     print("Done! cDNA Reference Build")
@@ -248,7 +248,7 @@ def write_batch_file(samples: dict, out_path: Path, parity: str) -> Path:
     return out_path
 
 
-def run_count(samples: dict, index: str, t2g: str, parity: str = "paired",
+def run_count(samples: list, index: str, t2g: str, parity: str = "paired",
               work_dir: Path=None) -> Path:
     """
     parity: "paired" or "single" — samples dict shape must match (see write_batch_file).
@@ -261,25 +261,36 @@ def run_count(samples: dict, index: str, t2g: str, parity: str = "paired",
         work_dir.mkdir(exist_ok=True)
 
     start = time.time()
-
     
     batch_file = write_batch_file(samples, work_dir / "batch.txt", parity)
     out_dir = work_dir / "counts_out"
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    subprocess.run([
-        *KB_CMD, "count",
-        "-x", "BULK",
-        "-i", index,
-        "-g", t2g,
-        "--parity", parity,
-        "-o", str(out_dir),
-        "--kallisto", KALLISTO,
-        "--matrix-to-files",
-        "-t", "8",
-        str(batch_file),
-    ], check=True, cwd=work_dir)
+    with open(batch_file, "r") as sample_file:
+        for line in sample_file:
+            pairs = line.strip().split(sep="\t")
+            if len(pairs) < 2:
+                (f"{line} does not indicate a pair")
+                continue
 
-    print("Done! Run Count function")
+            sample_name = pairs[0]
+            fwd, back = pairs[1], pairs[2]
+
+            spec_outdir = out_dir/ sample_name
+            
+            subprocess.run([
+                KALLISTO,
+                "quant",
+                "-i",
+                index,
+                "-o",
+                spec_outdir,
+                "-t",
+                "8",
+                fwd,back
+            ], check=True, cwd=work_dir)
+
+    print("Done! Kallisto Quant function")
     elapsed = time.time() - start
     print(f"Took {elapsed:.1f} seconds")
     return out_dir
