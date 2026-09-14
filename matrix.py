@@ -7,78 +7,73 @@ import time
 from kb_script import APP_DATA_DIR
 
 '''
-1. go into the wordir count output folder 
-2. for each sample abundance file.tsv, set the first sample as the constructor foundation for your replace counts column name with sample name (from directory)
-3. for each following column save the sample name as the count column, join that revised dataframe on the gene column name or join on that column drop all others 
-4. repeat via a loop
-5. convert the ENSG ensembl gene ids to their gene name mappings
-6. for all duplicate names sum the .groupby(gene_name).sum()
-7. return the final overall table
-
+1. go into the workdir count output folder
+2. for each sample abundance.tsv, rename its est_counts column to the sample name (from directory)
+3. outer-merge each sample's [target_id, est_counts_<sample>] onto the running accumulator, on target_id
+4. repeat via a loop across all sample directories
+5. strip Ensembl version suffixes, then convert ENSG ids to gene names via batched Ensembl API lookups
+6. for all duplicate gene names, sum via .groupby("gene_name").sum()
+7. return the final combined counts table: genes x samples, raw counts
 '''
 
-def load_kb_counts() -> pd.DataFrame:
-    kallisto_our_dir = APP_DATA_DIR/"counts_out_workdir"/"counts_out"
 
-# step 1 to 4 
-    prev = pd.DataFrame(columns = ["target_id"]) ##using the target id column to do join on 
+def batch_lookup(ids: list[str]) -> dict:
+    """POST up to 1000 Ensembl IDs at once, return {id: lookup_data_or_None}."""
+    url = "https://rest.ensembl.org/lookup/id"
     
-    #print("prev's head base df blank")
-    ##prev.head()
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    response = requests.post(url, headers=headers, json={"ids": ids})
+    response.raise_for_status()
+    return response.json()
 
-    for obj in kallisto_our_dir.iterdir():
 
+def load_kb_counts() -> pd.DataFrame:
+    kallisto_out_dir = APP_DATA_DIR / "counts_out_workdir" / "counts_out"
+
+    # steps 1-4: read + accumulate each sample's counts, joined on target_id
+    prev = pd.DataFrame(columns=["target_id"])
+
+    for obj in kallisto_out_dir.iterdir():
         if obj.is_dir():
-            file = obj/ "abundance.tsv"
+            file = obj / "abundance.tsv"
             df = pd.read_csv(file, sep="\t")
-            df = df[["target_id","est_counts"]]
-            df = df.rename(columns={"est_counts": f"est_counts_{obj.name}"}) ## to kep structure w obj name
-            ##print("column grouping")
-            ##print(df.head())
-
-            ##df = df.join(prev,on="target_id") ##ABORTED this version to stop index based merging, join will allow for column-based
+            df = df[["target_id", "est_counts"]]
+            df = df.rename(columns={"est_counts": f"est_counts_{obj.name}"})
             prev = pd.merge(prev, df, on="target_id", how="outer")
-
-            #print("JOINING with prev")
-            ##df.head()
 
     df = prev
 
-# step 2 mapping gene names
-    ## cleaning up the name
-    df["target_id"] = df["target_id"].str.replace(r'\.\d+$', '', regex=True)
+    #step 5: clean up target_id (strip Ensembl version suffix)
+    df["target_id"] = df["target_id"].str.replace(r'\.\d+$', '', regex=True) #d for digits
     df["gene_name"] = "N/A"
 
-    # REST API Calls from ENSEMBL 
+    #batched Ensembl lookups, target_id -> gene_name
+    all_ids = df["target_id"].unique().tolist()
+    chunk_size = 1000 ##to stop the exorbidant REST GET calls or POST calls it'll become 
+    gene_map = {}
 
-    for i, targ_id in df["target_id"].items():
-        url = f"https://rest.ensembl.org/lookup/id/{targ_id}"
-        headers = {"Content-Type" : "application/json"}
-
+    for i in range(0, len(all_ids), chunk_size): ##iterate such that unique target ids, tep count of chunk (creates batches):
+        chunk = all_ids[i:i + chunk_size]
         try:
-            response = requests.get(url, headers=headers)
+            result = batch_lookup(chunk)
+            gene_map.update(result) ##OVERWRITE an old result if needed
+
         except requests.exceptions.RequestException as e:
-            print(f"Request failed for {targ_id}: {e}")
-            df.at[i, "gene_name"] = "N/A"
-            time.sleep(0.1)
-            continue
+            print(f"Batch {i}-{i + chunk_size} failed: {e}")
+        time.sleep(1)  # gap between batches
 
-        # requests = get, put, patch, post or delete we use get since its an id lookup to fetch
-        if response.status_code == 200: ## a successful get 
-            data = response.json() ##taking response content into a python dict format json -> dict -> string
-            #print(data)
-            gene_id = data.get('display_name', "N/A")
-            df.at[i, "gene_name"] = gene_id
-        else:
-            df.at[i, "gene_name"] = targ_id
 
-        time.sleep(0.1)
+    df["gene_name"] = df["target_id"].map(
+        lambda tid: (gene_map.get(tid) or {}).get("display_name", tid)
+        if gene_map.get(tid) is not None else tid
+    )
 
-    df = df.drop(columns=["target_id"])          # drop the versioned/raw ID, keep gene_name
-    df = df.groupby("gene_name").sum()            # collapse duplicate gene names, sums their counts
+    #step 6: drop the raw id, collapse duplicate gene names by summing count
+    df = df.drop(columns=["target_id"])
+    df = df.groupby("gene_name").sum()
 
     return df
-    
+
 
 def normalize_cpm(counts: pd.DataFrame) -> pd.DataFrame:
     """Counts per million, using library size from the raw counts matrix."""
@@ -96,10 +91,12 @@ def export_matrix(df: pd.DataFrame, out_path: Path) -> None:
 
 
 if __name__ == "__main__":
-    #parser = argparse.ArgumentParser()
-    #parser.add_argument("--counts-dir", default= APP_DATA_DIR/"counts_out_workdir/counts_out/counts_unfiltered")
-    #args = parser.parse_args()
     counts = load_kb_counts()
+
+    # sanity checks before trusting the table downstream
+    print(f"dtypes:\n{counts.dtypes}")
+    print(f"index sample: {counts.index[:10].tolist()}")
+    print(f"NaNs per column:\n{counts.isna().sum()}")
 
     print(f"Shape: {counts.shape[0]} genes x {counts.shape[1]} samples")
     print(f"\nTotal counts per sample:\n{counts.sum(axis=0)}")
@@ -113,4 +110,3 @@ if __name__ == "__main__":
 
     export_matrix(cpm, Path("cpm_matrix.csv"))
     export_matrix(log_cpm, Path("log_cpm_matrix.csv"))
-
