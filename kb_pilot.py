@@ -7,48 +7,50 @@ import argparse
 import shutil
 import gzip
 import os
+import concurrent.futures
+
+def _bundle_root() -> Path:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)
+    return Path(__file__).resolve().parent
+
+BASE_DIR = _bundle_root()
+
 
 def find_binary(name, base_dir):
     local_path = base_dir / "bin" / name
-
-    # 1. Check local bin/ first
-    if local_path.exists() and local_path.is_file(): ##do the scripts and binaries exist
-        if not os.access(local_path, os.X_OK): ##is it an executable file or not
+    if local_path.exists() and local_path.is_file():
+        if not os.access(local_path, os.X_OK):
             raise RuntimeError(f"{local_path} exists but is not executable")
         return str(local_path)
-
-    # 2. Fallback to system PATH
     path = shutil.which(name)
     if path:
         return path
     raise RuntimeError(f"{name} not found in bin/ or PATH")
 
-BASE_DIR = Path(__file__).resolve().parent.parent ##absolute path 2 levels above the scripts (script > wrapped scripts folder > raw2compass then cue search)
 
 KALLISTO = find_binary("kallisto", BASE_DIR)
 BUSTOOLS = find_binary("bustools", BASE_DIR)
 
-APP_DATA_DIR = BASE_DIR / "workdir"
-KB_CMD = [sys.executable, "-m", "kb_python.main"]
+if getattr(sys, "frozen", False):
+    APP_DATA_DIR = Path.home() / ".RAW2Compass" / "workdir"
+else:
+    APP_DATA_DIR = BASE_DIR / "workdir"
+
 APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-print("Using:")
-print("  KALLISTO:", KALLISTO)
-print("  BUSTOOLS:", BUSTOOLS)
-print("  WORKDIR :", APP_DATA_DIR)
 
 def _build_t2g_from_cdna(cdna_fasta: Path, t2g_out: Path) -> None:
     """
     Extracts transcript_id / gene_id / gene_name from Ensembl cDNA FASTA
     headers directly, since --workflow=custom doesn't generate t2g.txt. this is used for generation and matching
 
-    file format is > header  followed by 
-    Trascript ID | cDNA | Location | Gene Name | Gene Symbol | may have descriptions
+    file format is > header followed by
+    Transcript ID | cDNA | Location | Gene Name | Gene Symbol | may have descriptions
     """
-
-    with gzip.open(cdna_fasta, "rt") as f, open(t2g_out, "w") as out: #read cdna and write t2g
+    with gzip.open(cdna_fasta, "rt") as f, open(t2g_out, "w") as out:
         for line in f:
-            if not line.startswith(">"): #group per fasta header
+            if not line.startswith(">"):
                 continue
             fields = line[1:].split()
             tx = fields[0]
@@ -61,17 +63,16 @@ def _build_t2g_from_cdna(cdna_fasta: Path, t2g_out: Path) -> None:
                     symbol = field.split(":", 1)[1]
             out.write(f"{tx}\t{gene}\t{symbol}\n")
 
-def ref_builder_cdna(species: str) -> tuple[str, str]: 
+def ref_builder_cdna(species: str) -> tuple[str, str]:
     """
     Fast path: builds index directly from a pre-made cDNA transcript FASTA
     (e.g. Ensembl's cdna.all.fa.gz), skipping genome+GTF splitting entirely.
-    Uses --workflow=custom under kb ref since its based on the ensembl fasta file
     """
     print("Hello! Starting cDNA Reference Build")
     start = time.time()
 
-    work_dir = APP_DATA_DIR / "kb_work" ## hsould house the index file
-    work_dir.mkdir(exist_ok=True) 
+    work_dir = APP_DATA_DIR / "kb_work"
+    work_dir.mkdir(exist_ok=True)
 
     index_file = f"{species}_index.idx"
     t2g_file = f"{species}_t2g.txt"
@@ -79,51 +80,40 @@ def ref_builder_cdna(species: str) -> tuple[str, str]:
     index_path = work_dir / index_file
     t2g_path = work_dir / t2g_file
 
-    if index_path.exists() and t2g_path.exists() and t2g_path.stat().st_size > 0: ##existing files and checking size for nonemptiness
+    if index_path.exists() and t2g_path.exists() and t2g_path.stat().st_size > 0:
         print(f"Reference for {species} already built — skipping.")
         return str(index_path), str(t2g_path)
 
     result = subprocess.run(
-                ["gget",
-                 "ref",
-                 "--ftp",
-                 "-w",
-                 "cdna",
-                 species
-                ],check=True,capture_output=True, text=True)
+        ["gget", "ref", "--ftp", "-w", "cdna", species],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
     cdna_url = result.stdout.strip()
     cdna_fasta = work_dir / Path(cdna_url).name
 
     if not cdna_fasta.exists():
         print(f"Downloading cDNA FASTA for {species}...")
-        subprocess.run(["curl", 
-                        "-L", 
-                        "-o", 
-                        str(cdna_fasta),
-                        cdna_url],
-                        check=True)
+        subprocess.run(["curl", "-L", "-o", str(cdna_fasta), cdna_url], check=True)
 
     if not t2g_path.exists() or t2g_path.stat().st_size == 0:
         print("Generating transcript-to-gene mapping from FASTA headers...")
         _build_t2g_from_cdna(cdna_fasta, t2g_path)
 
     print("kallisto index running...")
-    subprocess.run([
-        KALLISTO, 
-        "index",
-        "-i", index_file,
-        str(cdna_fasta.resolve()),
-    ], cwd=work_dir, check=True)
-
+    subprocess.run(
+        [KALLISTO, "index", "-i", str(index_path), str(cdna_fasta.resolve())],
+        cwd=work_dir,
+        check=True,
+    )
 
     elapsed = time.time() - start
     print("Done! cDNA Reference Build")
     print(f"Took {elapsed:.1f} seconds")
 
-    return str(work_dir / index_file), str(work_dir / t2g_file)
-
-
+    return str(index_path), str(t2g_path)
 
 ### FILE PAIR IDENTIFICATION AND DOWNSTREAM COUNTS FORMATION
 def find_file_pairs(folder: Path) -> tuple[dict, list]:
@@ -155,13 +145,13 @@ def find_file_pairs(folder: Path) -> tuple[dict, list]:
         matched = False
         for fwd_token, rev_token in PAIR_PATTERNS:
             if fwd_token in file.name:
-                rev_name = file.name.replace(fwd_token, rev_token) ##CREATING REV TOKEN TO SEARCH WITH
+                rev_name = file.name.replace(fwd_token, rev_token)
                 rev = file.parent / rev_name
                 if rev.exists():
-                    sample = file.name[:file.name.find(fwd_token)] ##Splicing filename 
+                    sample = file.name[:file.name.find(fwd_token)]
                     paired[sample] = (file, rev)
                     matched = True
-                break  # stop checking other patterns once one token matches
+                break
 
         if not matched:
             unpaired.append(file)
@@ -177,7 +167,6 @@ def find_file_pairs(folder: Path) -> tuple[dict, list]:
 def pair_selected_files(file_paths: list[Path]) -> tuple[dict, list]:
     """
     Pairs files from an explicit selection (e.g. multi-select file dialog).
-    Two-pass: find all valid pairs first, then anything not claimed is unpaired.
     """
     PAIR_PATTERNS = [
         ("_R1", "_R2"),
@@ -207,7 +196,6 @@ def pair_selected_files(file_paths: list[Path]) -> tuple[dict, list]:
     unpaired = [f for f in file_set if f not in claimed]
     return paired, unpaired
 
-
 def selected_files_as_singles(file_paths: list[Path]) -> dict:
     """Single-end mode: each selected file is its own sample."""
     singles = {}
@@ -233,7 +221,6 @@ def find_single_files(folder: Path) -> dict:
             singles[sample] = file
     return singles
 
-
 def write_batch_file(samples: dict, out_path: Path, parity: str) -> Path:
     """
     samples: {sample_id: (fwd, rev)} for paired, or {sample_id: file} for single.
@@ -247,89 +234,199 @@ def write_batch_file(samples: dict, out_path: Path, parity: str) -> Path:
                 f.write(f"{sample_id}\t{fwd}\n")
     return out_path
 
+def _run_kallisto_sample(sample_name: str, fwd: str, rev: str | None, index: str, out_dir: Path, parity: str, threads: int) -> str:
+    sample_outdir = out_dir / sample_name
+    sample_outdir.mkdir(parents=True, exist_ok=True)
 
-def run_count(samples: list, index: str, t2g: str, parity: str = "paired",
-              work_dir: Path=None) -> Path:
+    cmd = [
+        KALLISTO,
+        "quant",
+        "-i", index,
+        "-o", str(sample_outdir),
+        "-t", str(threads),
+    ]
+
+    if parity == "single":
+        cmd.extend(["--single", fwd])
+    else:
+        cmd.extend([fwd, rev])
+
+    print(f"[{sample_name}] starting kallisto quant")
+    with subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    ) as proc:
+        if proc.stdout is None:
+            raise RuntimeError(f"No stdout captured for {sample_name}")
+
+        for line in iter(proc.stdout.readline, ""):
+            if line:
+                print(f"[{sample_name}] {line.rstrip()}")
+
+        returncode = proc.wait()
+        if returncode != 0:
+            raise subprocess.CalledProcessError(returncode, cmd)
+
+    print(f"[{sample_name}] completed kallisto quant")
+    return sample_name
+
+def run_count(samples: dict,
+              index: str,
+              t2g: str,
+              parity: str = "paired",
+              work_dir: Path = None,
+              parallel: bool = True,
+              max_workers: int = None,
+              threads_per_sample: int = 8) -> Path:
     """
-    parity: "paired" or "single" — samples dict shape must match (see write_batch_file).
-    Returns the output directory path.
+    parity: "paired" or "single"
+    If parallel=True, each sample runs in a separate worker.
     """
     print("Hello! Beginning Run Count function")
 
     if work_dir is None:
         work_dir = APP_DATA_DIR / "counts_out_workdir"
-        work_dir.mkdir(exist_ok=True)
+    work_dir.mkdir(parents=True, exist_ok=True)
 
     start = time.time()
-    
+
     batch_file = write_batch_file(samples, work_dir / "batch.txt", parity)
     out_dir = work_dir / "counts_out"
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    with open(batch_file, "r") as sample_file:
-        for line in sample_file:
-            pairs = line.strip().split(sep="\t")
-            if len(pairs) < 2:
-                (f"{line} does not indicate a pair")
-                continue
+    if max_workers is None:
+        available = max(1, os.cpu_count() or 1)
+        max_workers = min(len(samples), max(1, available // 2))
 
-            sample_name = pairs[0]
-            fwd, back = pairs[1], pairs[2]
+    if parallel:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = []
+            for sample_name, sample_data in samples.items():
+                if parity == "paired":
+                    fwd, rev = sample_data
+                    futures.append(
+                        executor.submit(
+                            _run_kallisto_sample,
+                            sample_name,
+                            str(fwd),
+                            str(rev),
+                            index,
+                            out_dir,
+                            parity,
+                            threads_per_sample,
+                        )
+                    )
+                else:
+                    fwd = sample_data
+                    futures.append(
+                        executor.submit(
+                            _run_kallisto_sample,
+                            sample_name,
+                            str(fwd),
+                            None,
+                            index,
+                            out_dir,
+                            parity,
+                            threads_per_sample,
+                        )
+                    )
 
-            spec_outdir = out_dir/ sample_name
-            
-            subprocess.run([
-                KALLISTO,
-                "quant",
-                "-i",
-                index,
-                "-o",
-                spec_outdir,
-                "-t",
-                "8",
-                fwd,back
-            ], check=True, cwd=work_dir)
+            for future in concurrent.futures.as_completed(futures):
+                sample_name = future.result()
+                print(f"Finished {sample_name}")
+    else:
+        for sample_name, sample_data in samples.items():
+            if parity == "paired":
+                fwd, rev = sample_data
+                _run_kallisto_sample(
+                    sample_name,
+                    str(fwd),
+                    str(rev),
+                    index,
+                    out_dir,
+                    parity,
+                    threads_per_sample,
+                )
+            else:
+                fwd = sample_data
+                _run_kallisto_sample(
+                    sample_name,
+                    str(fwd),
+                    None,
+                    index,
+                    out_dir,
+                    parity,
+                    threads_per_sample,
+                )
 
     print("Done! Kallisto Quant function")
     elapsed = time.time() - start
     print(f"Took {elapsed:.1f} seconds")
     return out_dir
 
-
 if __name__ == "__main__":
-    # CLI test path — mirrors what gui.py will eventually call to handle any CLIs and specs
     parser = argparse.ArgumentParser()
 
-    #species and parity 
     parser.add_argument("--species", default="homo_sapiens")
     parser.add_argument("--parity", default="paired", choices=["single", "paired"])
+    parser.add_argument("--fastq-dir")
+    parser.add_argument("--files", nargs="+")
+    parser.add_argument("--max-workers", type=int, default=None)
+    parser.add_argument("--threads-per-sample", type=int, default=8)
+    parser.add_argument("--parallel", dest="parallel", action="store_true", default=True)
+    parser.add_argument("--no-parallel", dest="parallel", action="store_false")
 
-    #fastq and files 
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--fastq-dir")
-    group.add_argument("--files", nargs="+") ##file paths as a whole one after another 
-
-    #parser object gets created
     args = parser.parse_args()
 
-    #calling ref builder
     index, t2g = ref_builder_cdna(species=args.species)
 
-    ##paired vs unpaied files
     if args.parity == "paired":
         if args.fastq_dir is not None:
-            paired,unpaired = find_file_pairs(Path(args.fastq_dir))
-            run_count(paired, index, t2g, parity=args.parity)
+            paired, unpaired = find_file_pairs(Path(args.fastq_dir))
+            run_count(
+                paired,
+                index,
+                t2g,
+                parity=args.parity,
+                parallel=args.parallel,
+                max_workers=args.max_workers,
+                threads_per_sample=args.threads_per_sample,
+            )
         else:
-            pairs,unpaired = pair_selected_files(args.files)
-            run_count(pairs, index, t2g, parity=args.parity)
+            pairs, unpaired = pair_selected_files(args.files)
+            run_count(
+                pairs,
+                index,
+                t2g,
+                parity=args.parity,
+                parallel=args.parallel,
+                max_workers=args.max_workers,
+                threads_per_sample=args.threads_per_sample,
+            )
 
     if args.parity == "single":
         if args.fastq_dir is not None:
             singles = find_single_files(Path(args.fastq_dir))
-            run_count(singles , index, t2g, parity=args.parity)
+            run_count(
+                singles,
+                index,
+                t2g,
+                parity=args.parity,
+                parallel=args.parallel,
+                max_workers=args.max_workers,
+                threads_per_sample=args.threads_per_sample,
+            )
         else:
             singular = selected_files_as_singles(args.files)
-            run_count(singular , index, t2g, parity=args.parity)
-
-
+            run_count(
+                singular,
+                index,
+                t2g,
+                parity=args.parity,
+                parallel=args.parallel,
+                max_workers=args.max_workers,
+                threads_per_sample=args.threads_per_sample,
+            )

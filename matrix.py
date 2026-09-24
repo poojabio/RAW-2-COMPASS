@@ -1,60 +1,65 @@
-import scipy.io
-import numpy as np
-import pandas as pd
 from pathlib import Path
 
+import pandas as pd
+import numpy as np
 
-def load_kb_counts(counts_dir: Path) -> pd.DataFrame:
-    mtx_path = counts_dir / "cells_x_genes.mtx"
-    barcodes_path = counts_dir / "cells_x_genes.barcodes.txt"
-    genes_path = counts_dir / "cells_x_genes.genes.names.txt"
+from kb_pilot import APP_DATA_DIR
 
-    matrix = scipy.io.mmread(mtx_path).tocsr()
-    barcodes = pd.read_csv(barcodes_path, header=None)[0].tolist()
-    genes = pd.read_csv(genes_path, header=None)[0].tolist()
+def load_kb_counts(counts_dir: Path | None = None) -> pd.DataFrame:
+    if counts_dir is None:
+        counts_dir = APP_DATA_DIR / "counts_out_workdir" / "counts_out"
 
-    counts = pd.DataFrame(matrix.T.toarray(), index=genes, columns=barcodes)
-    counts.head(5)
+    counts_dir = Path(counts_dir)
+    t2g_candidates = list((APP_DATA_DIR / "kb_work").glob("*_t2g.txt"))
+    if not t2g_candidates:
+        raise FileNotFoundError(f"No t2g file found in {APP_DATA_DIR / 'kb_work'}")
+
+    t2g_file = t2g_candidates[0]
+
+    merged = None
+
+    for sample_dir in sorted(counts_dir.iterdir()):
+        if not sample_dir.is_dir():
+            continue
+
+        abundance_file = sample_dir / "abundance.tsv"
+        if not abundance_file.exists():
+            continue
+
+        df = pd.read_csv(abundance_file, sep="\t")
+        df = df[["target_id", "est_counts"]].copy()
+        df = df.rename(columns={"est_counts": sample_dir.name})
+
+        if merged is None:
+            merged = df
+        else:
+            merged = merged.merge(df, on="target_id", how="outer")
+
+    if merged is None:
+        raise FileNotFoundError(f"No abundance.tsv files found in {counts_dir}")
+
+    gene_map = {}
+    with open(t2g_file, "r") as fh:
+        for line in fh:
+            parts = line.strip().split("\t")
+            if len(parts) >= 3:
+                gene_map[parts[0]] = parts[2]
+
+    merged["gene_name"] = merged["target_id"].map(gene_map)
+    merged = merged.dropna(subset=["gene_name"])
+    merged = merged.drop(columns=["target_id"])
+
+    counts = merged.groupby("gene_name").sum()
     return counts
 
-def filter_low_expression(counts: pd.DataFrame, min_count: int = 10, min_samples: int = 1) -> pd.DataFrame:
-    """Keep a gene only if at least `min_samples` columns clear `min_count`."""
-    mask = (counts >= min_count).sum(axis=1) >= min_samples
-    print(f"Filtered {(~mask).sum()} / {len(counts)} genes below threshold "
-          f"(min_count={min_count}, min_samples={min_samples})")
-    return counts[mask]
-
-#### Normalizations - first cpm follwoed by log
-
 def normalize_cpm(counts: pd.DataFrame) -> pd.DataFrame:
-    """Counts per million, using library size from the raw counts matrix."""
     lib_sizes = counts.sum(axis=0)
-    return counts.div(lib_sizes, axis=1) * 1e6
-
+    return counts.div(lib_sizes, axis=1) * 1_000_000
 
 def log_transform(cpm: pd.DataFrame, pseudocount: float = 1.0) -> pd.DataFrame:
     return np.log2(cpm + pseudocount)
 
-
-def export_matrix(df: pd.DataFrame, out_path: Path) -> None:
-    df.to_csv(out_path)
-    print(f"Exported to {out_path}")
-
-
-if __name__ == "__main__":
-    counts = load_kb_counts(Path("counts_out/counts_unfiltered"))
-
-    print(f"Shape: {counts.shape[0]} genes x {counts.shape[1]} samples")
-    print(f"\nTotal counts per sample:\n{counts.sum(axis=0)}")
-    print(f"\nGenes with nonzero counts: {(counts.sum(axis=1) > 0).sum()} / {len(counts)}")
-
-    filtered = filter_low_expression(counts)
-    cpm = normalize_cpm(filtered)
-    log_cpm = log_transform(cpm)
-
-    print(f"\nFiltered shape: {filtered.shape}")
-    print(f"\nCPM (nonzero genes):\n{cpm[cpm.sum(axis=1) > 0]}")
-    print(f"\nLog2(CPM+1) (nonzero genes):\n{log_cpm[cpm.sum(axis=1) > 0]}")
-
-    export_matrix(cpm, Path("cpm_matrix.csv"))
-    export_matrix(log_cpm, Path("log_cpm_matrix.csv"))
+def export_matrix(df: pd.DataFrame, out_path: str | Path) -> None:
+    path = Path(out_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(path)
