@@ -71,7 +71,7 @@ def ref_builder_cdna(species: str) -> tuple[str, str]:
     start = time.time()
 
     work_dir = APP_DATA_DIR / "kb_work" ## hsould house the index file
-    work_dir.mkdir(exist_ok=True) ## if it exists it is idempotent
+    work_dir.mkdir(exist_ok=True) 
 
     index_file = f"{species}_index.idx"
     t2g_file = f"{species}_t2g.txt"

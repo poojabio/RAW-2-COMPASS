@@ -9,33 +9,36 @@ import gzip
 import os
 import concurrent.futures
 
+def _bundle_root() -> Path:
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS)
+    return Path(__file__).resolve().parent
+
+BASE_DIR = _bundle_root()
+
+
 def find_binary(name, base_dir):
     local_path = base_dir / "bin" / name
-
-    # 1. Check local bin/ first
     if local_path.exists() and local_path.is_file():
         if not os.access(local_path, os.X_OK):
             raise RuntimeError(f"{local_path} exists but is not executable")
         return str(local_path)
-
-    # 2. Fallback to system PATH
     path = shutil.which(name)
     if path:
         return path
     raise RuntimeError(f"{name} not found in bin/ or PATH")
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+
 KALLISTO = find_binary("kallisto", BASE_DIR)
 BUSTOOLS = find_binary("bustools", BASE_DIR)
 
-APP_DATA_DIR = BASE_DIR / "workdir"
-KB_CMD = [sys.executable, "-m", "kb_python.main"]
+if getattr(sys, "frozen", False):
+    APP_DATA_DIR = Path.home() / ".RAW2Compass" / "workdir"
+else:
+    APP_DATA_DIR = BASE_DIR / "workdir"
+
 APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-print("Using:")
-print("  KALLISTO:", KALLISTO)
-print("  BUSTOOLS:", BUSTOOLS)
-print("  WORKDIR :", APP_DATA_DIR)
 
 def _build_t2g_from_cdna(cdna_fasta: Path, t2g_out: Path) -> None:
     """
