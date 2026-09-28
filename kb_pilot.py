@@ -2,7 +2,7 @@ import sys
 import subprocess
 from pathlib import Path
 import time
-#import gget
+import gget
 import argparse
 import shutil
 import gzip
@@ -30,7 +30,7 @@ def find_binary(name, base_dir):
 
 
 KALLISTO = find_binary("kallisto", BASE_DIR)
-BUSTOOLS = find_binary("bustools", BASE_DIR)
+###BUSTOOLS = find_binary("bustools", BASE_DIR)
 
 if getattr(sys, "frozen", False):
     APP_DATA_DIR = Path.home() / ".RAW2Compass" / "workdir"
@@ -234,6 +234,7 @@ def write_batch_file(samples: dict, out_path: Path, parity: str) -> Path:
                 f.write(f"{sample_id}\t{fwd}\n")
     return out_path
 
+## KALLISTO RUN HELPER ###
 def _run_kallisto_sample(sample_name: str, fwd: str, rev: str | None, index: str, out_dir: Path, parity: str, threads: int) -> str:
     sample_outdir = out_dir / sample_name
     sample_outdir.mkdir(parents=True, exist_ok=True)
@@ -273,6 +274,9 @@ def _run_kallisto_sample(sample_name: str, fwd: str, rev: str | None, index: str
     print(f"[{sample_name}] completed kallisto quant")
     return sample_name
 
+
+#####
+
 def run_count(samples: dict,
               index: str,
               t2g: str,
@@ -309,7 +313,7 @@ def run_count(samples: dict,
                     fwd, rev = sample_data
                     futures.append(
                         executor.submit(
-                            _run_kallisto_sample,
+                            _run_kallisto_sample, ## calling the helper to execute subprocess cmd 
                             sample_name,
                             str(fwd),
                             str(rev),
