@@ -82,7 +82,7 @@ class PipelineWorker(QThread):
     def run(self):
         try:
             self.progress.emit("Building reference...")
-            index, t2g = ref_builder_cdna(self.species)
+            index, t2g = ref_builder_cdna(self.species) ##connection to the ref_builder_cdna function in kb_pilot.py to build the reference index and t2g file for the selected species
 
             self.progress.emit("Running kallisto quant...")
             out_dir = run_count(
@@ -121,7 +121,11 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(QLabel("Species"))
         self.species_combo = QComboBox()
-        self.species_combo.addItems(["human", "mouse", "dog", "monkey", "zebrafish"])
+        self.species_combo.addItem("Homo sapiens", "homo_sapiens")
+        self.species_combo.addItem("Mus musculus", "mus_musculus")
+        self.species_combo.addItem("Canis lupus familiaris", "canis_lupus_familiaris")
+        self.species_combo.addItem("Macaca mulatta", "macaca_mulatta")
+        self.species_combo.addItem("Danio rerio", "danio_rerio")
         layout.addWidget(self.species_combo)
 
         layout.addWidget(QLabel("FASTQ files"))
@@ -202,7 +206,7 @@ class MainWindow(QMainWindow):
         self.log.append("Starting pipeline...")
 
         self.worker = PipelineWorker(
-            species=self.species_combo.currentText(),
+            species=self.species_combo.currentData(),
             samples=selected,
             parity=self.parity_combo.currentText(),
             max_workers=None,

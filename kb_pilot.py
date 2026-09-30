@@ -92,11 +92,16 @@ def ref_builder_cdna(species: str) -> tuple[str, str]:
     )
 
     cdna_url = result.stdout.strip()
+    if not cdna_url:
+        raise RuntimeError(f"gget did not return a cDNA FASTA URL for {species}")
     cdna_fasta = work_dir / Path(cdna_url).name
 
-    if not cdna_fasta.exists():
+    if not cdna_fasta.is_file():
         print(f"Downloading cDNA FASTA for {species}...")
         subprocess.run(["curl", "-L", "-o", str(cdna_fasta), cdna_url], check=True)
+
+    if not cdna_fasta.is_file():
+        raise RuntimeError(f"Expected a cDNA FASTA file, got: {cdna_fasta}")
 
     if not t2g_path.exists() or t2g_path.stat().st_size == 0:
         print("Generating transcript-to-gene mapping from FASTA headers...")
@@ -303,7 +308,7 @@ def run_count(samples: dict,
 
     if max_workers is None:
         available = max(1, os.cpu_count() or 1)
-        max_workers = min(len(samples), max(1, available // 2))
+        max_workers = min(len(samples), max(1, available // 2)) ## desinate maxima using cpu presence
 
     if parallel:
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:

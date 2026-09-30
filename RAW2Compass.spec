@@ -4,13 +4,13 @@
 a = Analysis(
     ['gui.py'],
     pathex=[],
-    binaries=[('bin/kallisto', 'bin'), ('bin/bustools', 'bin')],
+    binaries=[('bin/kallisto', 'bin')],
     datas=[],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=['PyQt6'],
     noarchive=False,
     optimize=0,
 )
