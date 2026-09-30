@@ -8,6 +8,7 @@ import shutil
 import gzip
 import os
 import concurrent.futures
+from typing import Callable
 
 def _bundle_root() -> Path:
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
@@ -40,6 +41,42 @@ else:
 APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _emit(message: str, output: Callable[[str], None] | None = None) -> None:
+    if output is None:
+        print(message)
+    else:
+        output(message)
+
+
+def _run_streaming_command(
+    command: list[str],
+    output: Callable[[str], None] | None = None,
+    cwd: Path | None = None,
+) -> list[str]:
+    captured_lines = []
+    with subprocess.Popen(
+        command,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    ) as proc:
+        if proc.stdout is None:
+            raise RuntimeError(f"No output captured for command: {command}")
+
+        for line in iter(proc.stdout.readline, ""):
+            line = line.rstrip("\r\n")
+            captured_lines.append(line)
+            _emit(line, output)
+
+        returncode = proc.wait()
+        if returncode != 0:
+            raise subprocess.CalledProcessError(returncode, command)
+
+    return captured_lines
+
+
 def _build_t2g_from_cdna(cdna_fasta: Path, t2g_out: Path) -> None:
     """
     Extracts transcript_id / gene_id / gene_name from Ensembl cDNA FASTA
@@ -63,12 +100,15 @@ def _build_t2g_from_cdna(cdna_fasta: Path, t2g_out: Path) -> None:
                     symbol = field.split(":", 1)[1]
             out.write(f"{tx}\t{gene}\t{symbol}\n")
 
-def ref_builder_cdna(species: str) -> tuple[str, str]:
+def ref_builder_cdna(
+    species: str,
+    output: Callable[[str], None] | None = None,
+) -> tuple[str, str]:
     """
     Fast path: builds index directly from a pre-made cDNA transcript FASTA
     (e.g. Ensembl's cdna.all.fa.gz), skipping genome+GTF splitting entirely.
     """
-    print("Hello! Starting cDNA Reference Build")
+    _emit("Hello! Starting cDNA Reference Build", output)
     start = time.time()
 
     work_dir = APP_DATA_DIR / "kb_work"
@@ -81,42 +121,43 @@ def ref_builder_cdna(species: str) -> tuple[str, str]:
     t2g_path = work_dir / t2g_file
 
     if index_path.exists() and t2g_path.exists() and t2g_path.stat().st_size > 0:
-        print(f"Reference for {species} already built — skipping.")
+        _emit(f"Reference for {species} already built — skipping.", output)
         return str(index_path), str(t2g_path)
 
-    result = subprocess.run(
+    gget_output = _run_streaming_command(
         ["gget", "ref", "--ftp", "-w", "cdna", species],
-        check=True,
-        capture_output=True,
-        text=True,
+        output=output,
     )
 
-    cdna_url = result.stdout.strip()
+    cdna_url = next(
+        (line.strip() for line in gget_output if line.strip().startswith(("https://", "http://", "ftp://"))),
+        "",
+    )
     if not cdna_url:
         raise RuntimeError(f"gget did not return a cDNA FASTA URL for {species}")
     cdna_fasta = work_dir / Path(cdna_url).name
 
     if not cdna_fasta.is_file():
-        print(f"Downloading cDNA FASTA for {species}...")
-        subprocess.run(["curl", "-L", "-o", str(cdna_fasta), cdna_url], check=True)
+        _emit(f"Downloading cDNA FASTA for {species}...", output)
+        _run_streaming_command(["curl", "-L", "-o", str(cdna_fasta), cdna_url], output=output)
 
     if not cdna_fasta.is_file():
         raise RuntimeError(f"Expected a cDNA FASTA file, got: {cdna_fasta}")
 
     if not t2g_path.exists() or t2g_path.stat().st_size == 0:
-        print("Generating transcript-to-gene mapping from FASTA headers...")
+        _emit("Generating transcript-to-gene mapping from FASTA headers...", output)
         _build_t2g_from_cdna(cdna_fasta, t2g_path)
 
-    print("kallisto index running...")
-    subprocess.run(
+    _emit("kallisto index running...", output)
+    _run_streaming_command(
         [KALLISTO, "index", "-i", str(index_path), str(cdna_fasta.resolve())],
         cwd=work_dir,
-        check=True,
+        output=output,
     )
 
     elapsed = time.time() - start
-    print("Done! cDNA Reference Build")
-    print(f"Took {elapsed:.1f} seconds")
+    _emit("Done! cDNA Reference Build", output)
+    _emit(f"Took {elapsed:.1f} seconds", output)
 
     return str(index_path), str(t2g_path)
 
@@ -240,7 +281,16 @@ def write_batch_file(samples: dict, out_path: Path, parity: str) -> Path:
     return out_path
 
 ## KALLISTO RUN HELPER ###
-def _run_kallisto_sample(sample_name: str, fwd: str, rev: str | None, index: str, out_dir: Path, parity: str, threads: int) -> str:
+def _run_kallisto_sample(
+    sample_name: str,
+    fwd: str,
+    rev: str | None,
+    index: str,
+    out_dir: Path,
+    parity: str,
+    threads: int,
+    output: Callable[[str], None] | None = None,
+) -> str:
     sample_outdir = out_dir / sample_name
     sample_outdir.mkdir(parents=True, exist_ok=True)
 
@@ -257,7 +307,7 @@ def _run_kallisto_sample(sample_name: str, fwd: str, rev: str | None, index: str
     else:
         cmd.extend([fwd, rev])
 
-    print(f"[{sample_name}] starting kallisto quant")
+    _emit(f"[{sample_name}] starting kallisto quant", output)
     with subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -270,13 +320,13 @@ def _run_kallisto_sample(sample_name: str, fwd: str, rev: str | None, index: str
 
         for line in iter(proc.stdout.readline, ""):
             if line:
-                print(f"[{sample_name}] {line.rstrip()}")
+                _emit(f"[{sample_name}] {line.rstrip()}", output)
 
         returncode = proc.wait()
         if returncode != 0:
             raise subprocess.CalledProcessError(returncode, cmd)
 
-    print(f"[{sample_name}] completed kallisto quant")
+    _emit(f"[{sample_name}] completed kallisto quant", output)
     return sample_name
 
 
@@ -289,12 +339,13 @@ def run_count(samples: dict,
               work_dir: Path = None,
               parallel: bool = True,
               max_workers: int = None,
-              threads_per_sample: int = 8) -> Path:
+              threads_per_sample: int = 8,
+              output: Callable[[str], None] | None = None) -> Path:
     """
     parity: "paired" or "single"
     If parallel=True, each sample runs in a separate worker.
     """
-    print("Hello! Beginning Run Count function")
+    _emit("Hello! Beginning Run Count function", output)
 
     if work_dir is None:
         work_dir = APP_DATA_DIR / "counts_out_workdir"
@@ -326,6 +377,7 @@ def run_count(samples: dict,
                             out_dir,
                             parity,
                             threads_per_sample,
+                            output,
                         )
                     )
                 else:
@@ -340,12 +392,13 @@ def run_count(samples: dict,
                             out_dir,
                             parity,
                             threads_per_sample,
+                            output,
                         )
                     )
 
             for future in concurrent.futures.as_completed(futures):
                 sample_name = future.result()
-                print(f"Finished {sample_name}")
+                _emit(f"Finished {sample_name}", output)
     else:
         for sample_name, sample_data in samples.items():
             if parity == "paired":
@@ -358,6 +411,7 @@ def run_count(samples: dict,
                     out_dir,
                     parity,
                     threads_per_sample,
+                    output,
                 )
             else:
                 fwd = sample_data
@@ -369,11 +423,12 @@ def run_count(samples: dict,
                     out_dir,
                     parity,
                     threads_per_sample,
+                    output,
                 )
 
-    print("Done! Kallisto Quant function")
+    _emit("Done! Kallisto Quant function", output)
     elapsed = time.time() - start
-    print(f"Took {elapsed:.1f} seconds")
+    _emit(f"Took {elapsed:.1f} seconds", output)
     return out_dir
 
 if __name__ == "__main__":

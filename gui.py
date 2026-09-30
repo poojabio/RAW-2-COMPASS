@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from PySide6.QtCore import QThread, Signal, Qt
+from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -68,6 +69,7 @@ QListWidget::item:selected {{
 
 class PipelineWorker(QThread):
     progress = Signal(str)
+    output = Signal(str)
     finished_ok = Signal(object)
     failed = Signal(str)
 
@@ -82,7 +84,7 @@ class PipelineWorker(QThread):
     def run(self):
         try:
             self.progress.emit("Building reference...")
-            index, t2g = ref_builder_cdna(self.species) ##connection to the ref_builder_cdna function in kb_pilot.py to build the reference index and t2g file for the selected species
+            index, t2g = ref_builder_cdna(self.species, output=self.output.emit)
 
             self.progress.emit("Running kallisto quant...")
             out_dir = run_count(
@@ -93,6 +95,7 @@ class PipelineWorker(QThread):
                 parallel=True,
                 max_workers=self.max_workers,
                 threads_per_sample=self.threads_per_sample,
+                output=self.output.emit,
             )
 
             self.finished_ok.emit(out_dir)
@@ -213,9 +216,15 @@ class MainWindow(QMainWindow):
             threads_per_sample=4,
         )
         self.worker.progress.connect(self.log.append)
+        self.worker.output.connect(self.append_pipeline_output)
         self.worker.finished_ok.connect(self.on_pipeline_done)
         self.worker.failed.connect(self.on_pipeline_error)
         self.worker.start()
+
+    def append_pipeline_output(self, text):
+        self.log.moveCursor(QTextCursor.End)
+        self.log.insertPlainText(f"{text}\n")
+        self.log.ensureCursorVisible()
 
     def on_pipeline_done(self, out_dir):
         self.log.append(f"Pipeline complete. Output: {out_dir}")
