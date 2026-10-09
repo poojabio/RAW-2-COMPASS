@@ -1,6 +1,6 @@
 # RAW-2-COMPASS
 
-RAW-2-COMPASS is a no-code desktop application for processing FASTQ sequencing reads into gene-level count tables and normalized expression matrices, compatible with COMPASS(https://www.biorxiv.org/content/10.64898/2025.12.02.687315v1 - https://compass.precsn.com/). It builds a transcript reference with kallisto, quantifies selected samples, and exports CPM and log-CPM matrices.
+RAW-2-COMPASS is a no-code desktop application for processing FASTQ sequencing reads into gene-level count tables and normalized expression matrices, compatible with COMPASS (https://www.biorxiv.org/content/10.64898/2025.12.02.687315v1 - https://compass.precsn.com/). It builds a transcript reference with kallisto, quantifies selected samples, and exports CPM and log-CPM matrices.
 
 ## Ways to use the app
 
