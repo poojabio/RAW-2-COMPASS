@@ -1,5 +1,6 @@
 # RAW-2-COMPASS
-### RAW-2-COMPASS is a desktop application for processing FASTQ sequencing reads into gene-level count tables and normalized expression matrices. It builds a transcript reference with kallisto, quantifies selected samples, and exports CPM and log-CPM matrices.
+
+RAW-2-COMPASS is a desktop application for processing FASTQ sequencing reads into gene-level count tables and normalized expression matrices. It builds a transcript reference with kallisto, quantifies selected samples, and exports CPM and log-CPM matrices.
 
 ## Ways to use the app
 
@@ -16,6 +17,8 @@
 6. **Create expression matrices.** The app reads each sample's `abundance.tsv`, joins transcript estimates to gene symbols, sums transcript estimated counts by gene symbol, and calculates:
    - **CPM:** counts per million, calculated per sample.
    - **log-CPM:** `log2(CPM + 1)`.
+     
+![Worklfow](https://github.com/poojabio/RAW-2-COMPASS/blob/main/raw2compass_pipeline_codeworkflow.png)
 
 ## Outputs and working files
 
