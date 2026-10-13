@@ -20,7 +20,7 @@ This tool works for processed/Quality-controlled FASTQ zipped (fastq.gz) files. 
    - **CPM:** counts per million, calculated per sample.
    - **log-CPM:** `log2(CPM + 1)`.
      
-![Worklfow](https://github.com/poojabio/RAW-2-COMPASS/blob/main/raw2compass_pipeline_codeworkflow.png)
+![Worklfow](https://github.com/poojabio/RAW-2-COMPASS/blob/main/schematic.jpg)
 
 ## Outputs and working files
 
