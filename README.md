@@ -10,7 +10,7 @@ RAW-2-COMPASS is a no-code desktop application for processing FASTQ sequencing r
 ## Processing workflow
 
 **Note**
-This tool works for processed/Quality-controlled FASTQ zipped (fastq.gz) files. To apply quality control and understand the quality of your sequences visit ![FASTQC](https://www.bioinformatics.babraham.ac.uk/projects/fastqc/) 
+This tool works for processed/Quality-controlled FASTQ zipped (fastq.gz) files. To apply quality control and understand the quality of your sequences visit (https://www.bioinformatics.babraham.ac.uk/projects/fastqc/) 
 1. **Choose a reference species.** The GUI offers human (*Homo sapiens*), mouse (*Mus musculus*), dog (*Canis lupus familiaris*), rhesus macaque (*Macaca mulatta*), and zebrafish (*Danio rerio*).
 2. **Select FASTQ files and read type.** The application supports paired-end and single-end reads. For paired-end files, it looks for matching names containing `_R1`/`_R2`, `read1`/`read2`, `forward`/`reverse`, or `_1`/`_2`. Unmatched files are skipped. In single-end mode, each selected file is treated as a separate sample.
 3. **Review samples.** Detected samples appear in a checklist; all are selected by default, and individual samples can be unchecked.
