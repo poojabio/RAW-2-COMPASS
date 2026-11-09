@@ -33,7 +33,7 @@ The quantification results are organized by sample and include kallisto's `abund
 
 Matrix rows are gene symbols and columns are samples. Reference FASTA files, indexes, and quantification outputs can be large; make sure there is sufficient free disk space and an internet connection for the initial reference download.
 
-## Run from source in a local environment
+## Run from source in a local environment (non-downloadable, local instance)
 
 Python 3.10 or newer is required. From the downloaded or cloned project directory, create and activate a virtual environment, install the listed dependencies, and launch the GUI:
 
